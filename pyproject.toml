@@ -7,9 +7,14 @@ name = "kicad-terrarium"
 version = "0.0.1"
 description = "Make KiCad projects reproducibly self-contained."
 requires-python = ">= 3.10"
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.0",
+    "pyfiglet>=1.0",
+]
 
 [project.scripts]
-kicad-terrarium = "kicad_terrarium.cli:main"
+kicad-terrarium = "kicad_terrarium.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
