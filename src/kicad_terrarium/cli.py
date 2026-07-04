@@ -4,15 +4,18 @@ import typer
 from pyfiglet import figlet_format
 from rich.console import Console
 from rich.text import Text
+from pathlib import Path
 
 from kicad_terrarium import __version__
+from kicad_terrarium.core.discover import find_lib_ids, library_counts
+from kicad_terrarium.core.project import project_schematics
 
 # The typer "app" is the container all of our commands attach to.
 # Out pyproject entry point calls this object to launch the CLI.
 
 app = typer.Typer(
     name="kicad-terrarium",
-    help="Make KiCad porjects reproducibly self-contained.",
+    help="Make KiCad projects reproducibly self-contained.",
     )
 
 console = Console()
@@ -28,7 +31,7 @@ def line_colors(num_lines: int, palette: list[str]) -> list[str]:
     """
     colors = []
     for i in range(num_lines):
-        index = int(i // (num_lines / len(palette)))
+        index = i * len(palette) // num_lines
         colors.append(palette[index])
     return colors
 
@@ -54,3 +57,28 @@ def main(ctx: typer.Context) -> None:
 def hello(name: str = "world") -> None:
     """A throwaway command to prove subcommands + arguments work."""
     console.print(f"Hello, {name}!")
+
+@app.command()
+def scan(
+    path: Path = typer.Argument(...,
+         exists=True,
+         readable=True,
+         help="A .kicad_sch or .kicad_pcb file to inspect."),
+        ) -> None:
+    """
+    Report libraries used across a schematic and all its sub-sheets.
+    """
+    sheets = project_schematics(path)
+    all_ids: list[str]= []
+    for sheet in sheets:
+        all_ids += find_lib_ids(sheet.read_text())
+    counts = library_counts(all_ids)
+    total = sum(counts.values())
+
+    console.print(
+        f"[bold]{path.name}[/bold] (+{len(sheets) - 1} sub-sheets) - "
+        f"{len(counts)} libraries across {total} symbols:"
+        )
+
+    for lib, n in counts.most_common():
+        console.print(f"  • {lib}: {n}")
