@@ -5,10 +5,13 @@ from pyfiglet import figlet_format
 from rich.console import Console
 from rich.text import Text
 from pathlib import Path
+from kiutils.symbol import SymbolLib
 
 from kicad_terrarium import __version__
-from kicad_terrarium.core.discover import find_lib_ids, library_counts
+from kicad_terrarium.core.discover import find_lib_ids, library_counts, used_symbols
 from kicad_terrarium.core.project import project_schematics
+from kicad_terrarium.core.vendor import select_symbols
+
 
 # The typer "app" is the container all of our commands attach to.
 # Out pyproject entry point calls this object to launch the CLI.
@@ -82,3 +85,62 @@ def scan(
 
     for lib, n in counts.most_common():
         console.print(f"  • {lib}: {n}")
+
+@app.command()
+def vendor(
+    root: Path = typer.Argument(...,
+                                exists=True,
+                                readable=True,
+                                help="Root .kicad_sch of the project."),
+    source: Path = typer.Option(...,
+                                "--source",
+                                exists=True,
+                                readable=True,
+                                help="Source .kicad_sch to pull symbols from."),
+    library: str = typer.Option(...,
+                                "--library",
+                                help="Library name as it appears in lib_ids."),
+    output: Path = typer.Option(...,
+                                "--output",
+                                help="Where to write the vendored .kicad_sym."),
+    dry_run: bool = typer.Option(False,
+                                 "--dry-run",
+                                 help="Report what would happen, write nothing."),
+            ) -> None:
+    """Write a minimal local library containing only the symbols the project uses."""
+
+    # 1. discover what the project uses
+
+    all_ids: list[str] = []
+    for sheet in project_schematics(root):
+        all_ids += find_lib_ids(sheet.read_text())
+    wanted = used_symbols(all_ids, library)
+
+    # 2. load source, filter to what's used
+
+    src = SymbolLib.from_file(str(source))
+    kept, missing = select_symbols(src, wanted)
+
+    # 3. report BEFORE touching disk
+    console.print(f"Project uses [bold]{len(wanted)}[/bold] symbols from '{library}' .")
+    console.print(f"Source has {len(src.symbols)}; keeping {len(kept)}.")
+
+    if missing:
+        console.print(f"[red]⚠ missing from source:[/red] {sorted(missing)}")
+
+    if dry_run:
+        console.print("[yellow]dry-run - nothing written.[/yellow]")
+        return
+
+
+    # 4. safe write: back up an existing output before overwriting
+    if output.exists():
+        backup = output.with_suffix(output.suffix + ".bak")
+        backup.write_bytes(output.read_bytes())
+        console.print(f"backed up existing -> {backup.name}")
+
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    src.symbols = kept
+    src.to_file(str(output))
+    console.print(f"[green]✓ wrote {len(kept)} symbols -> {output}[/green]")

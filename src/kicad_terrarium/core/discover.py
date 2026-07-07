@@ -27,3 +27,16 @@ def library_counts(lib_ids: list[str]) -> Counter:
     Example: library_counts(["Device:R", "Device:C", "Connector:X", "Device:L"]) -> {"Device": 3, "Connector: 1}
     """
     return Counter(lib_id.split(":", 1)[0] for lib_id in lib_ids)
+
+def used_symbols(lib_ids: list[str], library: str) -> set[str]:
+    """
+    Symbol names used from one specific library.
+
+    Example: used_symbols(["al-mawja-library:C", "al-mawja-library:R"] -> {"C", "R"})
+    """
+    names: set[str] = set()
+    for lib_id in lib_ids:
+        lib, _, symbol = lib_id.partition(":")
+        if lib == library:
+            names.add(symbol)
+    return names
