@@ -12,6 +12,7 @@ from kicad_terrarium.core.discover import find_lib_ids, library_counts, used_sym
 from kicad_terrarium.core.project import project_schematics
 from kicad_terrarium.core.vendor import select_symbols
 from kicad_terrarium.core.repoint import repoint_text
+from kicad_terrarium.core.verify import registered_libraries, external_libraries
 
 
 # The typer "app" is the container all of our commands attach to.
@@ -179,3 +180,29 @@ def repoint(
     verb = "Would rewrite" if dry_run else "Rewrote"
     tag = " [yellow](dry-run)[/yellow]" if dry_run else ""
     console.print(f"[bold]{verb} {total} references[/bold] '{old_library}' -> '{new_library}'{tag}")
+
+@app.command()
+def verify(
+    root: Path = typer.Argument(...,
+                                exists=True,
+                                readable=True,
+                                help="Root .kicad_sch of the project to check."),
+          ) -> None:
+    """Confirm every library the project uses is registered locally."""
+    all_ids: list[str] = []
+    for sheet in project_schematics(root):
+        all_ids += find_lib_ids(sheet.read_text())
+    used = set(library_counts(all_ids))                       # library names referenced
+
+    table = root.parent / "sym-lib-table"                     # the project's registration
+    registered = registered_libraries(table.read_text()) if table.exists() else set()
+
+    external = external_libraries(used, registered)
+
+    if external:
+        console.print(f"[red]✗ NOT self-contained![/red] - {len(external)} external:")
+        for lib in sorted(external):
+            console.print(f"  • {lib}")
+        raise typer.Exit(code=1)                             # <- non-zero exit = failure
+    console.print(f"[green]✓ self-contained[/green] - {'all' if len(used) == 1 else ''} {len(used)} "
+                  f"librar{'y' if len(used) == 1 else 'ies'} registered locally.")
