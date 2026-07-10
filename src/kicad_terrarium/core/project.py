@@ -2,6 +2,7 @@ from pathlib import Path
 
 from kicad_terrarium.core.discover import sheet_files
 
+
 def project_schematics(root: Path) -> list[Path]:
     """
     Walk from 'root', following sub-sheet references, and return every reachable
@@ -9,9 +10,9 @@ def project_schematics(root: Path) -> list[Path]:
 
     A Sheetfile reference is relative to the folder of the file that names it.
     """
-    ordered: list[Path] = [] # results, in discovery order
-    seen: set[Path] = set() # guards against revisits and cycles
-    worklist: list[Path] = [root] # files still waiting to be processed
+    ordered: list[Path] = []  # results, in discovery order
+    seen: set[Path] = set()  # guards against revisits and cycles
+    worklist: list[Path] = [root]  # files still waiting to be processed
 
     while worklist:
         current = worklist.pop().resolve()

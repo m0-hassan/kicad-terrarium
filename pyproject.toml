@@ -21,10 +21,30 @@ dependencies = [
 Homepage = "https://github.com/m0-hassan/kicad-terrarium"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.0"]
 
 [project.scripts]
 kicad-terrarium = "kicad_terrarium.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+line-length = 100
+extend-exclude = ["build"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# Typer's design REQUIRES calling Argument()/Option() in parameter defaults,
+# so tell bugbear (B008) these particular calls are safe there.
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
+
+[tool.mypy]
+python_version = "3.14"
+
+# kiutils ships no type hints; don't fail on its untyped imports.
+[[tool.mypy.overrides]]
+module = ["kiutils.*"]
+ignore_missing_imports = true

@@ -2,9 +2,11 @@ import re
 
 _TABLE_NAME_PATTERN = re.compile(r'\(name "([^"]+)"\)')
 
+
 def registered_libraries(table_text: str) -> set[str]:
     """Library names declared in a sym-lib-table."""
     return set(_TABLE_NAME_PATTERN.findall(table_text))
+
 
 def external_libraries(used: set[str], registered: set[str]) -> set[str]:
     """
