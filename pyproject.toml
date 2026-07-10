@@ -14,6 +14,9 @@ dependencies = [
     "kiutils>=1.4",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
 [project.scripts]
 kicad-terrarium = "kicad_terrarium.cli:app"
 
