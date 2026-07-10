@@ -11,6 +11,7 @@ from kicad_terrarium import __version__
 from kicad_terrarium.core.discover import find_lib_ids, library_counts, used_symbols
 from kicad_terrarium.core.project import project_schematics
 from kicad_terrarium.core.vendor import select_symbols
+from kicad_terrarium.core.repoint import repoint_text
 
 
 # The typer "app" is the container all of our commands attach to.
@@ -144,3 +145,37 @@ def vendor(
     src.symbols = kept
     src.to_file(str(output))
     console.print(f"[green]✓ wrote {len(kept)} symbols -> {output}[/green]")
+
+@app.command()
+def repoint(
+    root: Path = typer.Argument(...,
+                                exists=True,
+                                readable=True,
+                                help="Root .kicad_sch of a COPY (this rewrites files)."),
+    old_library: Path = typer.Option(...,
+                                "--old",
+                                help="Library name to replace."),
+    new_library: Path = typer.Option(...,
+                                "--new",
+                                help="Library name to use instead."),
+    dry_run: bool = typer.Option(False,
+                                 "--dry-run",
+                                 help="Report only; change nothing."),
+            ) -> None:
+    """Rewrite every lib reference from --old to --new across a project's sheets."""
+    total = 0
+    for sheet in project_schematics(root):
+        new_text, n = repoint_text(sheet.read_text(), old_library, new_library)
+        total += n
+
+        if n and not dry_run:
+            backup = sheet.with_suffix(sheet.suffix + ".bak") # power.kicad_sch.bak
+            backup.write_bytes(sheet.read_bytes())            # safety net first
+            sheet.write_text(new_text)                        # then overwrite
+
+        note = "" if not n else (" -> rewritten (.bak saved)" if not dry_run else " (would rewrite)")
+        console.print(f"{sheet.name}: {n}{note}")
+
+    verb = "Would rewrite" if dry_run else "Rewrote"
+    tag = " [yellow](dry-run)[/yellow]" if dry_run else ""
+    console.print(f"[bold]{verb} {total} references[/bold] '{old_library}' -> '{new_library}'{tag}")
