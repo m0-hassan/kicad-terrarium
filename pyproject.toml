@@ -4,15 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kicad-terrarium"
-version = "0.0.1"
+version = "0.1.0"
 description = "Make KiCad projects reproducibly self-contained."
+readme = "README.md"
 requires-python = ">= 3.10"
+license = "MIT"
+authors = [{ name = "Mo Hassan", email = "mohassan@uchicago.edu"}]
 dependencies = [
     "typer>=0.12",
     "rich>=13.0",
     "pyfiglet>=1.0",
     "kiutils>=1.4",
 ]
+
+[project.urls]
+Homepage = "https://github.com/m0-hassan/kicad-terrarium"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
