@@ -12,3 +12,8 @@ def test_flags_libraries_not_in_the_table():
 def test_registered_libraries_parses_names_from_table():
     table = '(sym_lib_table (lib (name "terrarium")(type "KiCad")) (lib (name "power")))'
     assert registered_libraries(table) == {"terrarium", "power"}
+
+
+def test_registered_libraries_ignores_names_outside_lib_entries():
+    table = '(sym_lib_table (name "loose") (lib (name "real")(type "KiCad")))'
+    assert registered_libraries(table) == {"real"}

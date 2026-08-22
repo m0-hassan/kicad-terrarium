@@ -8,8 +8,8 @@ from rich.console import Console
 from rich.text import Text
 
 from kicad_terrarium import __version__
-from kicad_terrarium.core.discover import find_lib_ids, library_counts, used_symbols
-from kicad_terrarium.core.project import project_schematics
+from kicad_terrarium.core.discover import library_counts, used_symbols
+from kicad_terrarium.core.project import project_lib_ids, project_schematics
 from kicad_terrarium.core.repoint import repoint_text
 from kicad_terrarium.core.vendor import select_symbols
 from kicad_terrarium.core.verify import external_libraries, registered_libraries
@@ -62,12 +62,6 @@ def main(ctx: typer.Context) -> None:
 
 
 @app.command()
-def hello(name: str = "world") -> None:
-    """A throwaway command to prove subcommands + arguments work."""
-    console.print(f"Hello, {name}!")
-
-
-@app.command()
 def scan(
     path: Path = typer.Argument(
         ..., exists=True, readable=True, help="A .kicad_sch or .kicad_pcb file to inspect."
@@ -77,9 +71,7 @@ def scan(
     Report libraries used across a schematic and all its sub-sheets.
     """
     sheets = project_schematics(path)
-    all_ids: list[str] = []
-    for sheet in sheets:
-        all_ids += find_lib_ids(sheet.read_text())
+    all_ids = project_lib_ids(path)
     counts = library_counts(all_ids)
     total = sum(counts.values())
 
@@ -109,11 +101,7 @@ def vendor(
     """Write a minimal local library containing only the symbols the project uses."""
 
     # 1. discover what the project uses
-
-    all_ids: list[str] = []
-    for sheet in project_schematics(root):
-        all_ids += find_lib_ids(sheet.read_text())
-    wanted = used_symbols(all_ids, library)
+    wanted = used_symbols(project_lib_ids(root), library)
 
     # 2. load source, filter to what's used
 
@@ -180,10 +168,7 @@ def verify(
     ),
 ) -> None:
     """Confirm every library the project uses is registered locally."""
-    all_ids: list[str] = []
-    for sheet in project_schematics(root):
-        all_ids += find_lib_ids(sheet.read_text())
-    used = set(library_counts(all_ids))  # library names referenced
+    used = set(library_counts(project_lib_ids(root)))  # library names referenced
 
     table = root.parent / "sym-lib-table"  # the project's registration
     registered = registered_libraries(table.read_text()) if table.exists() else set()

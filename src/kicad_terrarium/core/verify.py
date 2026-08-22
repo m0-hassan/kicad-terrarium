@@ -1,6 +1,6 @@
 import re
 
-_TABLE_NAME_PATTERN = re.compile(r'\(name "([^"]+)"\)')
+_TABLE_NAME_PATTERN = re.compile(r'\(lib\s*\(name "([^"]+)"\)')
 
 
 def registered_libraries(table_text: str) -> set[str]:

@@ -1,7 +1,7 @@
-from kiutils.symbol import SymbolLib
+from kiutils.symbol import Symbol, SymbolLib
 
 
-def select_symbols(source: SymbolLib, wanted: set[str]):
+def select_symbols(source: SymbolLib, wanted: set[str]) -> tuple[list[Symbol], set[str]]:
     """
     Keep only the source library's symbols whose name is in 'wanted'.
 
