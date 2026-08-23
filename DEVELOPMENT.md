@@ -88,6 +88,9 @@ project while KiCad has it open (lock files: `~<name>.kicad_sch.lck`).
 ## Roadmap
 
 Footprint vendoring (`fp-lib-table` is the same format; `resolve.py` already
-handles it) → value→package rules for R/C (config-driven; refuses inductors:
-saturation current is a judgment call) → orphan recovery (search paths for a
-library containing a missing symbol).
+handles it) → `pluck`: vendor a *named* symbol from any library or project
+into the project lib *before* it is used (vendor works backward from usage;
+pluck works forward from intent — the machinery is identical, only the
+wanted-set source differs) → value→package rules for R/C (config-driven;
+refuses inductors: saturation current is a judgment call) → orphan recovery
+(search paths for a library containing a missing symbol).
