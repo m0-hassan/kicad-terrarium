@@ -87,16 +87,13 @@ project while KiCad has it open (lock files: `~<name>.kicad_sch.lck`).
 
 ## Roadmap
 
-Done: `pluck` (forward-vendoring a named symbol from a curated library or
-another project; `list` to browse; JSON config for locations). Next, in
-order:
+Done: `pluck`/`list`/config (forward-vendoring, browsing, JSON config) and
+`size` (value→package rules for R/C; refuses inductors). Next, in order:
 
 - **interactive picker** over `list`→`pluck` (transient fuzzy-select at the
   decision point only — never a persistent TUI; every picker must keep a
   `--flag` equivalent so scripts and CI never depend on the UI).
-- **`size`**: opt-in value→package rules for R/C from a config table, with
-  `--dry-run`. Refuses inductors (saturation current is a judgment call) and
-  surfaces the capacitor voltage-derating caveat rather than deciding it.
 - **footprint vendoring** (`fp-lib-table` is the same format; `resolve.py`
-  already resolves it) — plus copying `.pretty` and 3D models.
+  already resolves it) — plus copying `.pretty` and 3D models, and rewriting
+  model paths to `${KIPRJMOD}` (audit already flags non-portable ones).
 - **orphan recovery**: search paths for a library containing a missing symbol.

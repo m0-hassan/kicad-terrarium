@@ -18,6 +18,7 @@ class Config:
 
     curated_library: Path | None = None
     project_roots: list[Path] = field(default_factory=list)
+    sizing: dict = field(default_factory=dict)  # raw; see core.sizing.rules_from_config
 
 
 def parse_config(text: str) -> Config:
@@ -27,6 +28,7 @@ def parse_config(text: str) -> Config:
     return Config(
         curated_library=Path(lib).expanduser() if lib else None,
         project_roots=[Path(r).expanduser() for r in raw.get("project_roots", [])],
+        sizing=raw.get("sizing", {}),
     )
 
 
@@ -37,6 +39,8 @@ def dump_config(config: Config) -> str:
         data["curated_library"] = str(config.curated_library)
     if config.project_roots:
         data["project_roots"] = [str(p) for p in config.project_roots]
+    if config.sizing:
+        data["sizing"] = config.sizing
     return json.dumps(data, indent=2) + "\n"
 
 

@@ -22,6 +22,7 @@ so CI can watch it.
 | `verify <root>` | Exit 1 unless every used library is registered project-locally |
 | `list [target]` | Browse configured projects, or the symbols in a library or project |
 | `pluck <symbol>` | Copy a symbol (and inherited parents) into a project, before you place it |
+| `size <root>` | Assign footprints to unassigned resistors and capacitors by value |
 | `repoint <root> --old X --new Y` | Rewrite lib references (only needed when renaming) |
 
 ### `vendor`
@@ -95,6 +96,16 @@ Configure locations in `~/.config/kicad-terrarium/config.json`:
 Keeping your reusable symbols in one curated library — separate from KiCad's
 stock libraries, which are wiped on update — means a part is never trapped
 inside a single project again.
+
+### `size`
+
+Passive package is partly a function of value: a 10 µF needs more physical
+volume than a 100 nF, and an undersized MLCC quietly loses capacitance to
+DC-bias derating. `size` assigns footprints to unassigned resistors and
+capacitors from a value table (default: all R at 0603; C at 0603 up to 1 µF,
+0805 above), fills only empty footprints, and **leaves inductors alone** —
+their package depends on saturation current, which no value reveals. Override
+the table under `"sizing"` in the config; always previewable with `--dry-run`.
 
 ## Install
 

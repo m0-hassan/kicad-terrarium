@@ -14,7 +14,12 @@ from kicad_terrarium.core.audit import (
     pad_names,
 )
 from kicad_terrarium.core.config import CONFIG_PATH, load_config
-from kicad_terrarium.core.discover import library_counts, symbol_instances, used_symbols
+from kicad_terrarium.core.discover import (
+    library_counts,
+    reassign_footprints,
+    symbol_instances,
+    used_symbols,
+)
 from kicad_terrarium.core.extract import (
     library_version,
     merge_symbols,
@@ -25,6 +30,7 @@ from kicad_terrarium.core.extract import (
 from kicad_terrarium.core.project import project_lib_ids, project_schematics
 from kicad_terrarium.core.repoint import repoint_text
 from kicad_terrarium.core.resolve import resolve_footprint_libs, resolve_libraries
+from kicad_terrarium.core.sizing import INDUCTOR_SYMBOLS, footprint_for, rules_from_config
 from kicad_terrarium.core.tables import merge_sym_lib_table
 from kicad_terrarium.core.verify import external_libraries, registered_libraries
 
@@ -339,6 +345,54 @@ def pluck(
         console.print(f"[green]✓ added {added} and registered '{lib_name}'[/green]")
     else:
         console.print(f"[green]✓ '{symbol}' already present; '{lib_name}' registered[/green]")
+
+
+@app.command()
+def size(
+    root: Path = typer.Argument(
+        ..., exists=True, readable=True, help="Root .kicad_sch of the project."
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report only; write nothing."),
+) -> None:
+    """Assign footprints to unassigned resistors and capacitors by value.
+
+    Uses a size table (0603 up to 1 µF, 0805 above; all resistors 0603 by
+    default — override under "sizing" in the config). Only fills empty
+    footprints; never overwrites. Inductors are left alone on purpose:
+    their package depends on saturation current, which is your call.
+    """
+    rules = rules_from_config(load_config().sizing)
+
+    def decide(ref: str, lib_id: str, value: str, current: str) -> str | None:
+        return None if current else footprint_for(lib_id, value, rules)
+
+    total = 0
+    inductors: set[str] = set()
+    for sheet in project_schematics(root):
+        text = sheet.read_text()
+        new_text, applied = reassign_footprints(text, decide)
+        for ref, fp in sorted(set(applied)):  # multi-unit symbols report once
+            console.print(f"  {ref} → {fp.split(':', 1)[-1]}")
+        total += len(set(applied))
+        if applied and not dry_run:
+            sheet.with_suffix(sheet.suffix + ".bak").write_bytes(sheet.read_bytes())
+            sheet.write_text(new_text)
+        inductors |= {
+            ref
+            for ref, lib_id, fp in symbol_instances(text)
+            if not fp and lib_id.split(":", 1)[-1] in INDUCTOR_SYMBOLS
+        }
+
+    verb = "would assign" if dry_run else "assigned"
+    tag = " [yellow](dry-run)[/yellow]" if dry_run else ""
+    console.print(f"[bold]{verb} {total} footprint{'s' if total != 1 else ''}[/bold]{tag}")
+    if inductors:
+        console.print(
+            f"[dim]left for you: {sorted(inductors)} — inductor package depends on "
+            f"saturation current, not value.[/dim]"
+        )
+    if not dry_run and total:
+        console.print("run [bold]audit[/bold] to check pin/pad consistency.")
 
 
 @app.command()

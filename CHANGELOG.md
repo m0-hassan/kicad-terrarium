@@ -18,6 +18,10 @@ First public release.
   the current project — forward-vendoring, so a reusable part is never
   trapped inside one project. `list` browses projects and library symbols
   without opening KiCad.
+- New `size` command: assign footprints to unassigned resistors and
+  capacitors by value (configurable table; 0603/0805 defaults), filling only
+  empty footprints and refusing inductors (saturation current is a human
+  decision).
 - kiutils removed: round-tripping KiCad 10 symbol libraries through it
   drops every `(hide yes)` property flag. Reading and writing are now
   text-based throughout.
