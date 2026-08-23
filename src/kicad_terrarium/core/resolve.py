@@ -1,13 +1,13 @@
-"""Locate the .kicad_sym file behind every library name a project can see.
+"""Locate the library files behind every library name a project can see.
 
 Two tables matter, project first (its entries shadow global ones — the same
 lookup order KiCad uses):
 
-1. `<project>/sym-lib-table`
+1. `<project>/sym-lib-table` (or `fp-lib-table` for footprints)
 2. the newest global table, e.g. `~/Library/Preferences/kicad/10.0/sym-lib-table`
 
 KiCad 10 adds one indirection: a global entry with `(type "Table")` whose uri
-is *another* sym-lib-table (the stock one shipped with the app). One level of
+is *another* lib table (the stock one shipped with the app). One level of
 recursion follows it.
 """
 
@@ -16,6 +16,7 @@ from pathlib import Path
 
 _LIB_ENTRY = re.compile(r'\(lib\s*\(name "([^"]+)"\)\s*\(type "([^"]+)"\)\s*.*?\(uri "([^"]+)"\)')
 _KICAD_SYMBOL_VAR = re.compile(r"\$\{KICAD\d+_SYMBOL_DIR\}")
+_KICAD_FOOTPRINT_VAR = re.compile(r"\$\{KICAD\d+_FOOTPRINT_DIR\}")
 
 MAC_SHARE = Path("/Applications/KiCad/KiCad.app/Contents/SharedSupport")
 MAC_CONFIG = Path.home() / "Library/Preferences/kicad"
@@ -31,11 +32,12 @@ def expand_uri(uri: str, project_dir: Path, share_dir: Path = MAC_SHARE) -> Path
     """Substitute the KiCad path variables terrarium understands."""
     uri = uri.replace("${KIPRJMOD}", str(project_dir))
     uri = _KICAD_SYMBOL_VAR.sub(str(share_dir / "symbols"), uri)
+    uri = _KICAD_FOOTPRINT_VAR.sub(str(share_dir / "footprints"), uri)
     return Path(uri)
 
 
-def newest_global_table(config_dir: Path = MAC_CONFIG) -> Path | None:
-    """The highest-versioned KiCad config dir's sym-lib-table, if any."""
+def newest_global_table(table_name: str, config_dir: Path = MAC_CONFIG) -> Path | None:
+    """The highest-versioned KiCad config dir's table of that name, if any."""
 
     def version_key(p: Path) -> float:
         try:
@@ -43,19 +45,17 @@ def newest_global_table(config_dir: Path = MAC_CONFIG) -> Path | None:
         except ValueError:
             return -1.0
 
-    tables = [p for p in config_dir.glob("*/sym-lib-table") if p.is_file()]
+    tables = [p for p in config_dir.glob(f"*/{table_name}") if p.is_file()]
     return max(tables, key=version_key) if tables else None
 
 
-def resolve_libraries(
-    project_dir: Path,
-    share_dir: Path = MAC_SHARE,
-    config_dir: Path = MAC_CONFIG,
+def _resolve(
+    project_dir: Path, table_name: str, share_dir: Path, config_dir: Path
 ) -> dict[str, Path]:
-    """{library name: existing .kicad_sym path}, project entries winning.
+    """{library name: existing path}, project entries winning; missing dropped.
 
-    Entries whose file does not exist on this machine are dropped — reporting
-    them as unresolvable beats crashing on a half-installed library set.
+    Reporting an entry as unresolvable beats crashing on a half-installed
+    library set, so entries whose path does not exist are simply omitted.
     """
 
     def load(table_path: Path, depth: int) -> dict[str, Path]:
@@ -65,15 +65,33 @@ def resolve_libraries(
             if lib_type == "Table":
                 if depth < 2 and path.is_file():
                     found.update(load(path, depth + 1))
-            elif path.is_file():
+            elif path.exists():
                 found[name] = path
         return found
 
     result: dict[str, Path] = {}
-    global_table = newest_global_table(config_dir)
+    global_table = newest_global_table(table_name, config_dir)
     if global_table is not None:
         result.update(load(global_table, 0))
-    project_table = project_dir / "sym-lib-table"
+    project_table = project_dir / table_name
     if project_table.is_file():
         result.update(load(project_table, 0))
     return result
+
+
+def resolve_libraries(
+    project_dir: Path,
+    share_dir: Path = MAC_SHARE,
+    config_dir: Path = MAC_CONFIG,
+) -> dict[str, Path]:
+    """{symbol library name: .kicad_sym path} for everything resolvable."""
+    return _resolve(project_dir, "sym-lib-table", share_dir, config_dir)
+
+
+def resolve_footprint_libs(
+    project_dir: Path,
+    share_dir: Path = MAC_SHARE,
+    config_dir: Path = MAC_CONFIG,
+) -> dict[str, Path]:
+    """{footprint library name: .pretty directory} for everything resolvable."""
+    return _resolve(project_dir, "fp-lib-table", share_dir, config_dir)

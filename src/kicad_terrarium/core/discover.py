@@ -30,6 +30,30 @@ def library_counts(lib_ids: list[str]) -> Counter:
     return Counter(lib_id.split(":", 1)[0] for lib_id in lib_ids)
 
 
+_INSTANCE_SPLIT = re.compile(r"\n\t\(symbol\n")
+_LIB_ID = re.compile(r'\(lib_id "([^"]+)"\)')
+_REF_PROP = re.compile(r'\(property "Reference" "([^"]*)"')
+_FP_PROP = re.compile(r'\(property "Footprint" "([^"]*)"')
+
+
+def symbol_instances(text: str) -> list[tuple[str, str, str]]:
+    """(reference, lib_id, footprint) for every placed symbol in a schematic.
+
+    Splits on the instance blocks that follow the lib_symbols cache; the
+    cache itself never matches because its symbols carry their name on the
+    same line.
+    """
+    instances = []
+    for part in _INSTANCE_SPLIT.split(text)[1:]:
+        lib_id = _LIB_ID.search(part)
+        if not lib_id:
+            continue
+        ref = _REF_PROP.search(part)
+        fp = _FP_PROP.search(part)
+        instances.append((ref.group(1) if ref else "?", lib_id.group(1), fp.group(1) if fp else ""))
+    return instances
+
+
 def used_symbols(lib_ids: list[str], library: str) -> set[str]:
     """
     Symbol names used from one specific library.

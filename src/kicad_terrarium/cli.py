@@ -7,11 +7,17 @@ from rich.console import Console
 from rich.text import Text
 
 from kicad_terrarium import __version__
-from kicad_terrarium.core.discover import library_counts, used_symbols
+from kicad_terrarium.core.audit import (
+    cache_symbol_pins,
+    foreign_model_paths,
+    missing_pads,
+    pad_names,
+)
+from kicad_terrarium.core.discover import library_counts, symbol_instances, used_symbols
 from kicad_terrarium.core.extract import vendor_library
 from kicad_terrarium.core.project import project_lib_ids, project_schematics
 from kicad_terrarium.core.repoint import repoint_text
-from kicad_terrarium.core.resolve import resolve_libraries
+from kicad_terrarium.core.resolve import resolve_footprint_libs, resolve_libraries
 from kicad_terrarium.core.tables import merge_sym_lib_table
 from kicad_terrarium.core.verify import external_libraries, registered_libraries
 
@@ -196,6 +202,90 @@ def repoint(
     verb = "Would rewrite" if dry_run else "Rewrote"
     tag = " [yellow](dry-run)[/yellow]" if dry_run else ""
     console.print(f"[bold]{verb} {total} references[/bold] '{old_library}' -> '{new_library}'{tag}")
+
+
+@app.command()
+def audit(
+    root: Path = typer.Argument(
+        ..., exists=True, readable=True, help="Root .kicad_sch of the project to lint."
+    ),
+) -> None:
+    """Read-only lint: report the mechanical gaps that bite during layout.
+
+    Checks footprint assignment, footprint existence, symbol-pin vs
+    footprint-pad consistency, orphaned sheet files, and 3D model paths
+    that will not travel. Exits 1 if anything is found; safe to run while
+    KiCad is open.
+    """
+    sheets = project_schematics(root)
+    project_dir = root.parent
+
+    instances: list[tuple[str, str, str, str]] = []  # (sheet, ref, lib_id, footprint)
+    cache: dict[str, set[str]] = {}
+    for sheet in sheets:
+        text = sheet.read_text()
+        instances += [(sheet.name, *inst) for inst in symbol_instances(text)]
+        cache.update(cache_symbol_pins(text))
+    physical = [inst for inst in instances if not inst[2].startswith("power:")]
+
+    findings = 0
+
+    def section(title: str, rows: list[str]) -> None:
+        nonlocal findings
+        unique = sorted(set(rows))  # multi-unit symbols yield one row per placed unit
+        if unique:
+            findings += len(unique)
+            console.print(f"[red]✗ {title}[/red] ({len(unique)})")
+            for row in unique:
+                console.print(f"  • {row}")
+
+    section(
+        "unassigned footprints",
+        [f"{ref} ({lib_id}) [{sheet}]" for sheet, ref, lib_id, fp in physical if not fp],
+    )
+
+    fp_libs = resolve_footprint_libs(project_dir)
+    unknown_libs, missing_mods, mismatches = [], [], []
+    for _sheet, ref, lib_id, fp in physical:
+        if not fp:
+            continue
+        lib, _, name = fp.partition(":")
+        pretty = fp_libs.get(lib)
+        if pretty is None:
+            unknown_libs.append(f"{ref}: footprint library '{lib}' not in any fp-lib-table")
+            continue
+        mod = pretty / f"{name}.kicad_mod"
+        if not mod.is_file():
+            missing_mods.append(f"{ref}: {fp} has no .kicad_mod file")
+            continue
+        pins = cache.get(lib_id)
+        if pins:
+            missing = missing_pads(pins, pad_names(mod.read_text()))
+            if missing:
+                mismatches.append(f"{ref}: pins {sorted(missing)} have no pad on {fp}")
+    section("unknown footprint libraries", unknown_libs)
+    section("footprints without files", missing_mods)
+    section("symbol pins without pads", mismatches)
+
+    reached = {s.resolve() for s in sheets}
+    section(
+        "orphaned sheet files (nothing references them)",
+        sorted(p.name for p in project_dir.glob("*.kicad_sch") if p.resolve() not in reached),
+    )
+
+    foreign = []
+    for lib, pretty in fp_libs.items():
+        if project_dir not in pretty.parents:
+            continue  # only project-local libraries must be self-contained
+        for mod in sorted(pretty.glob("*.kicad_mod")):
+            for path in foreign_model_paths(mod.read_text()):
+                foreign.append(f"{lib}:{mod.stem}: model path won't travel: {path}")
+    section("3D model paths outside the project", foreign)
+
+    if findings:
+        console.print(f"[bold red]{findings} finding{'s' if findings != 1 else ''}.[/bold red]")
+        raise typer.Exit(code=1)
+    console.print(f"[green]✓ audit clean[/green] - {len(physical)} physical symbols checked.")
 
 
 @app.command()
