@@ -2,16 +2,17 @@ import sys
 from pathlib import Path
 
 import typer
-from kiutils.symbol import SymbolLib
 from pyfiglet import figlet_format
 from rich.console import Console
 from rich.text import Text
 
 from kicad_terrarium import __version__
 from kicad_terrarium.core.discover import library_counts, used_symbols
+from kicad_terrarium.core.extract import vendor_library
 from kicad_terrarium.core.project import project_lib_ids, project_schematics
 from kicad_terrarium.core.repoint import repoint_text
-from kicad_terrarium.core.vendor import select_symbols
+from kicad_terrarium.core.resolve import resolve_libraries
+from kicad_terrarium.core.tables import merge_sym_lib_table
 from kicad_terrarium.core.verify import external_libraries, registered_libraries
 
 # The typer "app" is the container all of our commands attach to.
@@ -89,46 +90,82 @@ def vendor(
     root: Path = typer.Argument(
         ..., exists=True, readable=True, help="Root .kicad_sch of the project."
     ),
-    source: Path = typer.Option(
-        ..., "--source", exists=True, readable=True, help="Source .kicad_sch to pull symbols from."
+    source: Path | None = typer.Option(
+        None, "--source", help="Override: vendor one library from this .kicad_sym."
     ),
-    library: str = typer.Option(..., "--library", help="Library name as it appears in lib_ids."),
-    output: Path = typer.Option(..., "--output", help="Where to write the vendored .kicad_sym."),
+    library: str | None = typer.Option(None, "--library", help="Override: that library's name."),
+    output: Path | None = typer.Option(None, "--output", help="Override: where to write it."),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Report what would happen, write nothing."
     ),
 ) -> None:
-    """Write a minimal local library containing only the symbols the project uses."""
+    """Vendor every library the project uses into ./library and register it.
 
-    # 1. discover what the project uses
-    wanted = used_symbols(project_lib_ids(root), library)
+    Without flags, reads the project and global sym-lib-tables to find each
+    library's source file, copies the used symbols (plus inherited parents)
+    byte-for-byte, and registers the copies so they shadow the originals.
+    Libraries with no table entry are reported as orphaned, and can be
+    vendored one at a time with --source/--library/--output.
+    """
+    all_ids = project_lib_ids(root)
 
-    # 2. load source, filter to what's used
-
-    src = SymbolLib.from_file(str(source))
-    kept, missing = select_symbols(src, wanted)
-
-    # 3. report BEFORE touching disk
-    console.print(f"Project uses [bold]{len(wanted)}[/bold] symbols from '{library}'.")
-    console.print(f"Source has {len(src.symbols)}; keeping {len(kept)}.")
-
-    if missing:
-        console.print(f"[red]⚠ missing from source:[/red] {sorted(missing)}")
-
-    if dry_run:
-        console.print("[yellow]dry-run - nothing written.[/yellow]")
+    if source or library or output:
+        if not (source and library and output):
+            console.print("[red]--source, --library and --output must be given together.[/red]")
+            raise typer.Exit(code=2)
+        _vendor_one(source, used_symbols(all_ids, library), library, output, dry_run)
         return
 
-    # 4. safe write: back up an existing output before overwriting
-    if output.exists():
-        backup = output.with_suffix(output.suffix + ".bak")
-        backup.write_bytes(output.read_bytes())
-        console.print(f"backed up existing -> {backup.name}")
+    project_dir = root.parent
+    lib_map = resolve_libraries(project_dir)
+    vendored: list[str] = []
+    orphaned: list[str] = []
 
+    for lib_name, n_refs in sorted(library_counts(all_ids).items()):
+        src_path = lib_map.get(lib_name)
+        if src_path is None:
+            orphaned.append(lib_name)
+            continue
+        if project_dir in src_path.parents:
+            console.print(f"{lib_name}: already project-local ({n_refs} refs) - skipped")
+            continue
+        out_path = project_dir / "library" / f"{lib_name}.kicad_sym"
+        _vendor_one(src_path, used_symbols(all_ids, lib_name), lib_name, out_path, dry_run)
+        vendored.append(lib_name)
+
+    if vendored and not dry_run:
+        table_path = project_dir / "sym-lib-table"
+        existing = table_path.read_text() if table_path.exists() else None
+        if existing is not None:
+            table_path.with_suffix(".bak").write_text(existing)
+        table_path.write_text(merge_sym_lib_table(existing, vendored))
+        console.print(f"[green]✓ registered {len(vendored)} libraries in sym-lib-table[/green]")
+
+    if orphaned:
+        console.print(f"[yellow]⚠ orphaned (no table entry, not vendored):[/yellow] {orphaned}")
+        console.print("  vendor these manually with --source/--library/--output.")
+    if not dry_run:
+        console.print("run [bold]verify[/bold] to confirm the project is self-contained.")
+
+
+def _vendor_one(source: Path, wanted: set[str], library: str, output: Path, dry_run: bool) -> None:
+    """Vendor one library file; shared by auto and manual modes."""
+    lib_text, kept, missing = vendor_library(source.read_text(), wanted)
+
+    parents = len(kept) - len(wanted - missing)  # kept beyond the found wanted = parents pulled in
+    note = f" (+{parents} inherited parents)" if parents else ""
+    console.print(f"[bold]{library}[/bold]: {len(wanted)} used -> {len(kept)} symbols{note}")
+    if missing:
+        console.print(f"  [red]⚠ missing from source:[/red] {sorted(missing)}")
+    if dry_run:
+        console.print(f"  [yellow](dry-run) would write {output}[/yellow]")
+        return
+
+    if output.exists():
+        output.with_suffix(output.suffix + ".bak").write_bytes(output.read_bytes())
     output.parent.mkdir(parents=True, exist_ok=True)
-    src.symbols = kept
-    src.to_file(str(output))
-    console.print(f"[green]✓ wrote {len(kept)} symbols -> {output}[/green]")
+    output.write_text(lib_text)
+    console.print(f"  [green]✓ wrote {output}[/green]")
 
 
 @app.command()

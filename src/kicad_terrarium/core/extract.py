@@ -1,0 +1,101 @@
+"""Byte-exact symbol extraction from .kicad_sym files.
+
+kiutils must never WRITE a symbol library: round-tripping a KiCad 10 file
+silently drops every `(hide yes)` property flag and mangles `(show_name no)`,
+making all symbol properties visible in the editor. Vendoring therefore
+copies symbol blocks verbatim and only synthesizes the surrounding header.
+"""
+
+import re
+
+_SYMBOL_START = re.compile(r'\n\t\(symbol "([^"]+)"')
+_EXTENDS = re.compile(r'\(extends "([^"]+)"\)')
+_VERSION = re.compile(r"\(version (\d+)\)")
+
+
+def block_end(text: str, start: int) -> int:
+    """Index just past the ')' matching the '(' at text[start].
+
+    Quoted strings are skipped, so parentheses inside descriptions like
+    "amplifier (dual)" cannot desynchronize the depth count.
+    """
+    depth = 0
+    in_string = False
+    i = start
+    while i < len(text):
+        c = text[i]
+        if in_string:
+            if c == "\\":
+                i += 1  # skip the escaped character
+            elif c == '"':
+                in_string = False
+        elif c == '"':
+            in_string = True
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    raise ValueError("unbalanced s-expression")
+
+
+def symbol_blocks(lib_text: str) -> dict[str, str]:
+    """Top-level (symbol "NAME" ...) blocks, byte-for-byte, keyed by name."""
+    blocks: dict[str, str] = {}
+    for m in _SYMBOL_START.finditer(lib_text):
+        start = m.start() + 1  # skip the leading newline
+        blocks[m.group(1)] = lib_text[start : block_end(lib_text, start)]
+    return blocks
+
+
+def extends_closure(wanted: set[str], blocks: dict[str, str]) -> tuple[list[str], set[str]]:
+    """Names to vendor: `wanted` plus every transitive (extends ...) parent.
+
+    Stock libraries inherit heavily (OPA2197xD extends NCS2325D, ...); a
+    vendored library without the parents parses fine but cannot be drawn.
+
+    Returns (names ordered parents-first, wanted names absent from blocks).
+    """
+    missing = {name for name in wanted if name not in blocks}
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for name in sorted(wanted - missing):
+        chain = [name]
+        current = name
+        while True:
+            m = _EXTENDS.search(blocks[current])
+            if not m:
+                break
+            parent = m.group(1)
+            if parent in chain:  # inheritance cycle: stop, keep what we have
+                break
+            if parent not in blocks:
+                missing.add(parent)
+                break
+            chain.append(parent)
+            current = parent
+        for n in reversed(chain):  # root ancestor first
+            if n not in seen:
+                seen.add(n)
+                ordered.append(n)
+    return ordered, missing
+
+
+def assemble_library(names: list[str], blocks: dict[str, str], source_text: str) -> str:
+    """A .kicad_sym file holding `names`, format version copied from source."""
+    m = _VERSION.search(source_text)
+    version = m.group(1) if m else "20251024"
+    return (
+        "(kicad_symbol_lib\n"
+        f"\t(version {version})\n"
+        '\t(generator "kicad-terrarium")\n' + "\n".join(blocks[n] for n in names) + "\n)\n"
+    )
+
+
+def vendor_library(source_text: str, wanted: set[str]) -> tuple[str, list[str], set[str]]:
+    """One library, vendored: (output file text, names kept, names missing)."""
+    blocks = symbol_blocks(source_text)
+    ordered, missing = extends_closure(wanted, blocks)
+    return assemble_library(ordered, blocks, source_text), ordered, missing
