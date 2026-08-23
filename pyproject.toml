@@ -4,17 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kicad-terrarium"
-version = "0.1.0"
+version = "1.0.0"
 description = "Make KiCad projects reproducibly self-contained."
 readme = "README.md"
 requires-python = ">= 3.10"
 license = "MIT"
 authors = [{ name = "Mo Hassan", email = "mohassan@uchicago.edu"}]
+keywords = ["kicad", "eda", "schematic", "library", "vendoring", "lint"]
 dependencies = [
     "typer>=0.12",
     "rich>=13.0",
     "pyfiglet>=1.0",
-    "kiutils>=1.4",
 ]
 
 [project.urls]
@@ -43,8 +43,3 @@ extend-immutable-calls = ["typer.Argument", "typer.Option"]
 
 [tool.mypy]
 python_version = "3.14"
-
-# kiutils ships no type hints; don't fail on its untyped imports.
-[[tool.mypy.overrides]]
-module = ["kiutils.*"]
-ignore_missing_imports = true

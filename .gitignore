@@ -3,5 +3,4 @@ __pycache__/
 *.egg-info/
 demo/
 build/
-CLAUDE.md
 docs/
