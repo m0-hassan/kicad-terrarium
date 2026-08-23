@@ -1,6 +1,9 @@
 from kicad_terrarium.core.extract import (
     assemble_library,
     extends_closure,
+    library_version,
+    merge_symbols,
+    pluck_symbols,
     symbol_blocks,
     vendor_library,
 )
@@ -63,3 +66,29 @@ def test_vendor_library_end_to_end():
     out, kept, missing = vendor_library(LIB, {"R_US"})
     assert kept == ["R", "R_US"] and missing == set()
     assert '(symbol "C"' not in out and "(hide yes)" in out
+
+
+def test_pluck_symbols_includes_parents():
+    additions, missing = pluck_symbols(LIB, {"R_US"})
+    assert set(additions) == {"R", "R_US"} and missing == set()
+
+
+def test_merge_symbols_into_none_creates_library():
+    additions, _ = pluck_symbols(LIB, {"C"})
+    out, added = merge_symbols(None, additions, library_version(LIB))
+    assert added == ["C"]
+    assert out.startswith("(kicad_symbol_lib") and '(symbol "C"' in out
+
+
+def test_merge_symbols_appends_without_touching_existing():
+    base, _ = merge_symbols(None, pluck_symbols(LIB, {"C"})[0], "20251024")
+    merged, added = merge_symbols(base, pluck_symbols(LIB, {"R_US"})[0])
+    assert added == ["R", "R_US"]
+    assert '(symbol "C"' in merged  # existing symbol preserved
+    assert merged.count('(symbol "R_US"') == 1
+
+
+def test_merge_symbols_skips_duplicates():
+    base, _ = merge_symbols(None, pluck_symbols(LIB, {"C"})[0], "20251024")
+    merged, added = merge_symbols(base, pluck_symbols(LIB, {"C"})[0])
+    assert added == [] and merged == base

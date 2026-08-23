@@ -13,8 +13,15 @@ from kicad_terrarium.core.audit import (
     missing_pads,
     pad_names,
 )
+from kicad_terrarium.core.config import CONFIG_PATH, load_config
 from kicad_terrarium.core.discover import library_counts, symbol_instances, used_symbols
-from kicad_terrarium.core.extract import vendor_library
+from kicad_terrarium.core.extract import (
+    library_version,
+    merge_symbols,
+    pluck_symbols,
+    symbol_blocks,
+    vendor_library,
+)
 from kicad_terrarium.core.project import project_lib_ids, project_schematics
 from kicad_terrarium.core.repoint import repoint_text
 from kicad_terrarium.core.resolve import resolve_footprint_libs, resolve_libraries
@@ -202,6 +209,136 @@ def repoint(
     verb = "Would rewrite" if dry_run else "Rewrote"
     tag = " [yellow](dry-run)[/yellow]" if dry_run else ""
     console.print(f"[bold]{verb} {total} references[/bold] '{old_library}' -> '{new_library}'{tag}")
+
+
+def _find_project_root(directory: Path) -> Path | None:
+    """The root .kicad_sch of the KiCad project in `directory`, if exactly one."""
+    pros = sorted(directory.glob("*.kicad_pro"))
+    if len(pros) != 1:
+        return None
+    root = pros[0].with_suffix(".kicad_sch")
+    return root if root.is_file() else None
+
+
+def _local_libraries(project_dir: Path) -> list[Path]:
+    """The .kicad_sym files under a project's library/ folder."""
+    lib_dir = project_dir / "library"
+    return sorted(lib_dir.glob("*.kicad_sym")) if lib_dir.is_dir() else []
+
+
+def _source_files(source: Path) -> list[Path]:
+    """The .kicad_sym files a --from target offers: itself, or a project's libs."""
+    if source.is_file() and source.suffix == ".kicad_sym":
+        return [source]
+    project_dir = source if source.is_dir() else source.parent
+    return _local_libraries(project_dir)
+
+
+@app.command("list")
+def list_(
+    target: Path | None = typer.Argument(
+        None, help="A .kicad_sym file or a project. Omit to list configured projects."
+    ),
+) -> None:
+    """List projects, or the symbols available in a library or project."""
+    if target is None:
+        roots = load_config().project_roots
+        if not roots:
+            console.print(f"No project roots configured. Add some to {CONFIG_PATH}:")
+            console.print('  {"project_roots": ["~/path/to/projects"]}')
+            raise typer.Exit(code=1)
+        for root in roots:
+            for pro in sorted(root.glob("**/*.kicad_pro")) if root.is_dir() else []:
+                console.print(f"  {pro.stem}  [dim]{pro.parent}[/dim]")
+        return
+
+    if target.is_file() and target.suffix == ".kicad_sym":
+        for name in sorted(symbol_blocks(target.read_text())):
+            console.print(f"  {name}")
+        return
+
+    libs = _local_libraries(target if target.is_dir() else target.parent)
+    if not libs:
+        console.print(f"[yellow]no local libraries found for {target}[/yellow]")
+        return
+    for lib in libs:
+        names = sorted(symbol_blocks(lib.read_text()))
+        console.print(f"[bold]{lib.stem}[/bold] ({len(names)})")
+        for name in names:
+            console.print(f"  {name}")
+
+
+@app.command()
+def pluck(
+    symbol: str = typer.Argument(..., help="Symbol name to copy into the project."),
+    from_: Path | None = typer.Option(
+        None, "--from", help="Source .kicad_sym or project. Default: your curated library."
+    ),
+    into: Path | None = typer.Option(
+        None, "--into", help="Destination project root .kicad_sch. Default: the project here."
+    ),
+    as_lib: str | None = typer.Option(
+        None, "--as", help="Destination library name. Default: the source library's name."
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report only; write nothing."),
+) -> None:
+    """Copy a named symbol (and any inherited parents) into a project's library.
+
+    Vendor works backward from what a project already uses; pluck works
+    forward from intent, pulling a symbol in *before* you place it — so you
+    never have to mine an old project or open KiCad just to reuse a part.
+    """
+    source = from_ or load_config().curated_library
+    if source is None:
+        console.print("[red]no --from given and no curated_library configured.[/red]")
+        raise typer.Exit(code=2)
+
+    src_file = next(
+        (f for f in _source_files(source) if symbol in symbol_blocks(f.read_text())), None
+    )
+    if src_file is None:
+        console.print(f"[red]symbol '{symbol}' not found in {source}[/red]")
+        raise typer.Exit(code=1)
+
+    root = into or _find_project_root(Path.cwd())
+    if root is None:
+        console.print("[red]no --into given and no single project in the current directory.[/red]")
+        raise typer.Exit(code=2)
+
+    source_text = src_file.read_text()
+    additions, missing = pluck_symbols(source_text, {symbol})
+    if missing:
+        console.print(f"[red]⚠ missing from source: {sorted(missing)}[/red]")
+        raise typer.Exit(code=1)
+
+    lib_name = as_lib or src_file.stem
+    parents = sorted(set(additions) - {symbol})
+    note = f" (+{parents} inherited)" if parents else ""
+    console.print(
+        f"pluck [bold]{symbol}[/bold]{note}  {src_file.name} → library/{lib_name}.kicad_sym"
+    )
+    if dry_run:
+        console.print("[yellow](dry-run) nothing written.[/yellow]")
+        return
+
+    dest_file = root.parent / "library" / f"{lib_name}.kicad_sym"
+    dest_text = dest_file.read_text() if dest_file.exists() else None
+    if dest_text is not None:
+        dest_file.with_suffix(".kicad_sym.bak").write_bytes(dest_file.read_bytes())
+    new_text, added = merge_symbols(dest_text, additions, library_version(source_text))
+    dest_file.parent.mkdir(parents=True, exist_ok=True)
+    dest_file.write_text(new_text)
+
+    table = root.parent / "sym-lib-table"
+    existing = table.read_text() if table.exists() else None
+    if existing is not None:
+        table.with_suffix(".bak").write_text(existing)
+    table.write_text(merge_sym_lib_table(existing, [lib_name]))
+
+    if added:
+        console.print(f"[green]✓ added {added} and registered '{lib_name}'[/green]")
+    else:
+        console.print(f"[green]✓ '{symbol}' already present; '{lib_name}' registered[/green]")
 
 
 @app.command()

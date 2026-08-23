@@ -20,6 +20,8 @@ so CI can watch it.
 | `vendor <root>` | Copy every used symbol into `./library/`, register it, one command |
 | `audit <root>` | Read-only lint: the mechanical gaps that bite during layout |
 | `verify <root>` | Exit 1 unless every used library is registered project-locally |
+| `list [target]` | Browse configured projects, or the symbols in a library or project |
+| `pluck <symbol>` | Copy a symbol (and inherited parents) into a project, before you place it |
 | `repoint <root> --old X --new Y` | Rewrite lib references (only needed when renaming) |
 
 ### `vendor`
@@ -62,6 +64,37 @@ The pin/pad check alone has caught two wrong default footprints shipped in
 KiCad's official libraries (a 10-pin comparator paired with SOIC-8, an 8-pin
 switch paired with SC-70-6) — defects that otherwise surface deep into
 layout. `audit` is read-only and safe to run while KiCad is open.
+
+### `list` and `pluck`
+
+`vendor` works backward from what a project already uses. `pluck` works
+forward from intent — it pulls a symbol into a project *before* you place it,
+so you never mine an old project or open KiCad just to reuse a part:
+
+```
+$ kicad-terrarium list                          # projects, from your config
+$ kicad-terrarium list ~/lib/mo-parts.kicad_sym # symbols in a library
+$ kicad-terrarium pluck Conn_Coaxial_INVERT     # from your curated library
+  into the project in the current directory
+```
+
+`pluck` defaults its source to a personal **curated library** and its
+destination to the project in the current directory; both are overridable
+(`--from` a library or another project, `--into` a specific project). It
+copies the symbol byte-for-byte with any inherited parents, merges it into
+the project's library without disturbing what's there, and registers it.
+Configure locations in `~/.config/kicad-terrarium/config.json`:
+
+```json
+{
+  "curated_library": "~/Documents/KiCad/libraries/mo-parts.kicad_sym",
+  "project_roots": ["~/Documents/KiCad/projects"]
+}
+```
+
+Keeping your reusable symbols in one curated library — separate from KiCad's
+stock libraries, which are wiped on update — means a part is never trapped
+inside a single project again.
 
 ## Install
 

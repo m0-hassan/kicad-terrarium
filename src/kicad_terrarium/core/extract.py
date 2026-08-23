@@ -110,15 +110,19 @@ def extends_closure(wanted: set[str], blocks: dict[str, str]) -> tuple[list[str]
     return ordered, missing
 
 
+def library_version(lib_text: str) -> str:
+    """The `(version N)` of a .kicad_sym, or the current default if absent."""
+    m = _VERSION.search(lib_text)
+    return m.group(1) if m else "20251024"
+
+
+def _wrap_library(body: str, version: str) -> str:
+    return f'(kicad_symbol_lib\n\t(version {version})\n\t(generator "kicad-terrarium")\n{body}\n)\n'
+
+
 def assemble_library(names: list[str], blocks: dict[str, str], source_text: str) -> str:
     """A .kicad_sym file holding `names`, format version copied from source."""
-    m = _VERSION.search(source_text)
-    version = m.group(1) if m else "20251024"
-    return (
-        "(kicad_symbol_lib\n"
-        f"\t(version {version})\n"
-        '\t(generator "kicad-terrarium")\n' + "\n".join(blocks[n] for n in names) + "\n)\n"
-    )
+    return _wrap_library("\n".join(blocks[n] for n in names), library_version(source_text))
 
 
 def vendor_library(source_text: str, wanted: set[str]) -> tuple[str, list[str], set[str]]:
@@ -126,3 +130,30 @@ def vendor_library(source_text: str, wanted: set[str]) -> tuple[str, list[str], 
     blocks = symbol_blocks(source_text)
     ordered, missing = extends_closure(wanted, blocks)
     return assemble_library(ordered, blocks, source_text), ordered, missing
+
+
+def pluck_symbols(source_text: str, wanted: set[str]) -> tuple[dict[str, str], set[str]]:
+    """Symbol blocks to copy for `wanted`, parents included: ({name: block}, missing)."""
+    blocks = symbol_blocks(source_text)
+    ordered, missing = extends_closure(wanted, blocks)
+    return {n: blocks[n] for n in ordered}, missing
+
+
+def merge_symbols(
+    dest_text: str | None, additions: dict[str, str], version: str = "20251024"
+) -> tuple[str, list[str]]:
+    """Add symbol blocks to a library, skipping names already present.
+
+    `dest_text` None creates a new library at `version`; otherwise existing
+    symbols are left byte-for-byte untouched. Returns (library text, names
+    actually added).
+    """
+    if dest_text is None:
+        return _wrap_library("\n".join(additions.values()), version), list(additions)
+    existing = set(symbol_blocks(dest_text))
+    added = [n for n in additions if n not in existing]
+    if not added:
+        return dest_text, []
+    trimmed = dest_text.rstrip()
+    close = trimmed.rfind(")")  # the library's closing paren
+    return trimmed[:close] + "\n".join(additions[n] for n in added) + "\n)\n", added

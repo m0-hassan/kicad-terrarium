@@ -13,6 +13,11 @@ First public release.
 - New `audit` command: read-only lint for unassigned footprints,
   unresolvable footprint references, symbol-pin/footprint-pad mismatches,
   orphaned sheet files, and non-portable 3D model paths.
+- New `pluck` command (with `list` and a JSON config): copy a named symbol,
+  plus any inherited parents, from a curated library or another project into
+  the current project — forward-vendoring, so a reusable part is never
+  trapped inside one project. `list` browses projects and library symbols
+  without opening KiCad.
 - kiutils removed: round-tripping KiCad 10 symbol libraries through it
   drops every `(hide yes)` property flag. Reading and writing are now
   text-based throughout.
