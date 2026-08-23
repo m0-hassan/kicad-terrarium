@@ -8,7 +8,7 @@ copies symbol blocks verbatim and only synthesizes the surrounding header.
 
 import re
 
-_SYMBOL_START = re.compile(r'\n\t\(symbol "([^"]+)"')
+_SYMBOL_HEAD = re.compile(r'\(symbol\s+"([^"]+)"')
 _EXTENDS = re.compile(r'\(extends "([^"]+)"\)')
 _VERSION = re.compile(r"\(version (\d+)\)")
 
@@ -42,11 +42,38 @@ def block_end(text: str, start: int) -> int:
 
 
 def symbol_blocks(lib_text: str) -> dict[str, str]:
-    """Top-level (symbol "NAME" ...) blocks, byte-for-byte, keyed by name."""
+    """Top-level (symbol "NAME" ...) blocks, byte-for-byte, keyed by name.
+
+    Found by depth tracking, never by indentation: hand-edited libraries
+    legally put `)` and the next `(symbol` on one line, so layout means
+    nothing. A block is any `(symbol` whose paren sits at depth 1, i.e.
+    directly inside `(kicad_symbol_lib`.
+    """
     blocks: dict[str, str] = {}
-    for m in _SYMBOL_START.finditer(lib_text):
-        start = m.start() + 1  # skip the leading newline
-        blocks[m.group(1)] = lib_text[start : block_end(lib_text, start)]
+    depth = 0
+    in_string = False
+    i = 0
+    while i < len(lib_text):
+        c = lib_text[i]
+        if in_string:
+            if c == "\\":
+                i += 1
+            elif c == '"':
+                in_string = False
+        elif c == '"':
+            in_string = True
+        elif c == "(":
+            if depth == 1:
+                m = _SYMBOL_HEAD.match(lib_text, i)
+                if m:
+                    end = block_end(lib_text, i)
+                    blocks[m.group(1)] = lib_text[i:end]
+                    i = end  # the block is balanced, so depth is unchanged
+                    continue
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        i += 1
     return blocks
 
 

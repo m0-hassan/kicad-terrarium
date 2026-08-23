@@ -34,6 +34,13 @@ def test_symbol_blocks_survives_parens_inside_strings():
     assert symbol_blocks(LIB)["R"].endswith("\t)")
 
 
+def test_symbol_blocks_ignores_layout():
+    # hand-edited libraries legally join `)` and the next `(symbol` on one
+    # line (seen in the wild); extraction must track depth, not indentation
+    lib = '(kicad_symbol_lib (version 20251024)\n\t(symbol "A"\n\t)\t(symbol "B"\n\t)\n)\n'
+    assert set(symbol_blocks(lib)) == {"A", "B"}
+
+
 def test_extends_closure_pulls_in_parents_first():
     ordered, missing = extends_closure({"R_US"}, symbol_blocks(LIB))
     assert ordered == ["R", "R_US"]
