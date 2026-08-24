@@ -1,4 +1,5 @@
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import typer
@@ -13,6 +14,7 @@ from kicad_terrarium.core.audit import (
     missing_pads,
     pad_names,
 )
+from kicad_terrarium.core.browse import Browser, Item, Screen
 from kicad_terrarium.core.config import CONFIG_PATH, load_config
 from kicad_terrarium.core.discover import (
     library_counts,
@@ -232,6 +234,22 @@ def _local_libraries(project_dir: Path) -> list[Path]:
     return sorted(lib_dir.glob("*.kicad_sym")) if lib_dir.is_dir() else []
 
 
+def _find_projects(roots: list[Path]) -> list[Path]:
+    """.kicad_pro files under the roots, skipping backup and autosave copies."""
+    projects = []
+    for root_dir in roots:
+        if not root_dir.is_dir():
+            continue
+        for pro in sorted(root_dir.glob("**/*.kicad_pro")):
+            if any(
+                parent.name.endswith("-backups") or parent.name.startswith("_autosave")
+                for parent in pro.parents
+            ):
+                continue
+            projects.append(pro)
+    return projects
+
+
 def _source_files(source: Path) -> list[Path]:
     """The .kicad_sym files a --from target offers: itself, or a project's libs."""
     if source.is_file() and source.suffix == ".kicad_sym":
@@ -253,9 +271,8 @@ def list_(
             console.print(f"No project roots configured. Add some to {CONFIG_PATH}:")
             console.print('  {"project_roots": ["~/path/to/projects"]}')
             raise typer.Exit(code=1)
-        for root in roots:
-            for pro in sorted(root.glob("**/*.kicad_pro")) if root.is_dir() else []:
-                console.print(f"  {pro.stem}  [dim]{pro.parent}[/dim]")
+        for pro in _find_projects(roots):
+            console.print(f"  {pro.stem}  [dim]{pro.parent}[/dim]")
         return
 
     if target.is_file() and target.suffix == ".kicad_sym":
@@ -311,6 +328,13 @@ def pluck(
         console.print("[red]no --into given and no single project in the current directory.[/red]")
         raise typer.Exit(code=2)
 
+    _pluck(symbol, src_file, root, as_lib, dry_run)
+
+
+def _pluck(
+    symbol: str, src_file: Path, root: Path, as_lib: str | None = None, dry_run: bool = False
+) -> None:
+    """Copy `symbol` (and inherited parents) from src_file into root's project."""
     source_text = src_file.read_text()
     additions, missing = pluck_symbols(source_text, {symbol})
     if missing:
@@ -345,6 +369,119 @@ def pluck(
         console.print(f"[green]✓ added {added} and registered '{lib_name}'[/green]")
     else:
         console.print(f"[green]✓ '{symbol}' already present; '{lib_name}' registered[/green]")
+
+
+@dataclass(frozen=True)
+class _PluckAction:
+    """A menu leaf's payload: copy `symbol` from `source` into the project."""
+
+    symbol: str
+    source: Path
+
+
+def _symbol_items(lib_file: Path, with_lib_tag: bool) -> list[Item]:
+    """Menu leaves for every symbol in a .kicad_sym, each a pluck action."""
+    items = []
+    for name in sorted(symbol_blocks(lib_file.read_text())):
+        label = f"{name}  [{lib_file.stem}]" if with_lib_tag else name
+        items.append(Item(label, action=_PluckAction(name, lib_file)))
+    return items
+
+
+def _build_browse_tree(config_curated: Path | None, project_roots: list[Path]) -> Screen:
+    """The source-browsing menu: curated library and projects → their symbols."""
+    top: list[Item] = []
+    if config_curated and config_curated.is_file():
+        top.append(Item("Curated library", children=_symbol_items(config_curated, False)))
+    projects: list[Item] = []
+    for pro in _find_projects(project_roots):
+        symbols: list[Item] = []
+        for lib in _local_libraries(pro.parent):
+            symbols += _symbol_items(lib, with_lib_tag=True)
+        if symbols:
+            projects.append(Item(pro.parent.name, children=symbols))  # folder disambiguates
+    if projects:
+        top.append(Item("Projects", children=projects))
+    return Screen("kicad-terrarium — pick a symbol to pluck", top)
+
+
+def _run_browser(root: Screen) -> object | None:
+    """Drive the curses menu; return the chosen leaf action, or None."""
+    import curses
+
+    picked: list[object] = []
+
+    def loop(stdscr) -> None:
+        curses.curs_set(0)
+        browser = Browser(root)
+        while True:
+            stdscr.erase()
+            height, width = stdscr.getmaxyx()
+            screen = browser.screen
+            rows = max(1, height - 4)
+            start = max(0, min(screen.cursor - rows // 2, len(screen.items) - rows))
+            stdscr.addnstr(0, 0, screen.title, width - 1, curses.A_BOLD)
+            for row, item in enumerate(screen.items[start : start + rows]):
+                selected = start + row == screen.cursor
+                marker = "› " if selected else "  "
+                arrow = " ›" if item.children is not None else ""
+                stdscr.addnstr(
+                    row + 2,
+                    0,
+                    f"{marker}{item.label}{arrow}",
+                    width - 1,
+                    curses.A_REVERSE if selected else curses.A_NORMAL,
+                )
+            stdscr.addnstr(height - 1, 0, "↑↓ move · ⏎ select · ← back · q quit", width - 1)
+            key = stdscr.getch()
+            if key in (ord("q"), 27):  # q or Esc
+                return
+            if key in (curses.KEY_UP, ord("k")):
+                browser.move(-1)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                browser.move(1)
+            elif key in (curses.KEY_LEFT, curses.KEY_BACKSPACE, 127, 8):
+                browser.back()
+            elif key in (curses.KEY_ENTER, 10, 13):
+                action = browser.enter()
+                if action is not None:
+                    picked.append(action)
+                    return
+
+    curses.wrapper(loop)
+    return picked[0] if picked else None
+
+
+@app.command()
+def browse(
+    into: Path | None = typer.Option(
+        None, "--into", help="Project to pluck into. Default: the project in this directory."
+    ),
+) -> None:
+    """Interactive menu: browse your libraries and projects, pluck a symbol.
+
+    A thin shell over `list` and `pluck` — everything it does is also a
+    flag-driven command, so scripts never need the menu.
+    """
+    if not sys.stdout.isatty():
+        console.print("[red]browse needs an interactive terminal — use 'list' and 'pluck'.[/red]")
+        raise typer.Exit(code=2)
+    root = into or _find_project_root(Path.cwd())
+    if root is None:
+        console.print("[red]no project here; pass --into <root.kicad_sch>.[/red]")
+        raise typer.Exit(code=2)
+
+    config = load_config()
+    tree = _build_browse_tree(config.curated_library, config.project_roots)
+    if not tree.items:
+        console.print(f"nothing to browse — set curated_library / project_roots in {CONFIG_PATH}.")
+        raise typer.Exit(code=1)
+
+    action = _run_browser(tree)
+    if isinstance(action, _PluckAction):
+        _pluck(action.symbol, action.source, root)
+    else:
+        console.print("[dim]nothing plucked.[/dim]")
 
 
 @app.command()

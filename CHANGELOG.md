@@ -22,6 +22,11 @@ First public release.
   capacitors by value (configurable table; 0603/0805 defaults), filling only
   empty footprints and refusing inductors (saturation current is a human
   decision).
+- New `browse` command: a full-screen arrow-key menu (stdlib curses) over
+  `list`/`pluck` — drill from the curated library or any project into its
+  symbols and pluck one. Navigation is a tested pure state machine
+  (`core.browse`); the menu carries no logic of its own, so every action
+  remains a plain flag-driven command. Unix terminals only.
 - kiutils removed: round-tripping KiCad 10 symbol libraries through it
   drops every `(hide yes)` property flag. Reading and writing are now
   text-based throughout.

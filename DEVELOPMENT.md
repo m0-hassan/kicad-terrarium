@@ -87,13 +87,18 @@ project while KiCad has it open (lock files: `~<name>.kicad_sch.lck`).
 
 ## Roadmap
 
-Done: `pluck`/`list`/config (forward-vendoring, browsing, JSON config) and
-`size` (value→package rules for R/C; refuses inductors). Next, in order:
+Done: `pluck`/`list`/config, `size` (R/C value→package), and `browse` (curses
+arrow-key menu over pluck; navigation is the pure `core.browse` state machine,
+so the TUI holds no logic). Next, in order:
 
-- **interactive picker** over `list`→`pluck` (transient fuzzy-select at the
-  decision point only — never a persistent TUI; every picker must keep a
-  `--flag` equivalent so scripts and CI never depend on the UI).
+- **`browse` extensions**: the menu supports arbitrary Item trees, so add
+  "Sizing rules" and "Config" screens (edit config from the menu) when wanted;
+  and consider paging for very long symbol lists.
 - **footprint vendoring** (`fp-lib-table` is the same format; `resolve.py`
   already resolves it) — plus copying `.pretty` and 3D models, and rewriting
   model paths to `${KIPRJMOD}` (audit already flags non-portable ones).
 - **orphan recovery**: search paths for a library containing a missing symbol.
+
+Note: the curses render/input loop in `cli._run_browser` is the one piece not
+covered by pytest (needs a real TTY). Its logic lives in `core.browse` (tested);
+keep the loop a thin view. Verify UI changes by running `browse` in a terminal.

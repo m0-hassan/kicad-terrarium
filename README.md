@@ -22,6 +22,7 @@ so CI can watch it.
 | `verify <root>` | Exit 1 unless every used library is registered project-locally |
 | `list [target]` | Browse configured projects, or the symbols in a library or project |
 | `pluck <symbol>` | Copy a symbol (and inherited parents) into a project, before you place it |
+| `browse` | Interactive menu over `list`/`pluck`: arrow-key through libraries and projects |
 | `size <root>` | Assign footprints to unassigned resistors and capacitors by value |
 | `repoint <root> --old X --new Y` | Rewrite lib references (only needed when renaming) |
 
@@ -96,6 +97,13 @@ Configure locations in `~/.config/kicad-terrarium/config.json`:
 Keeping your reusable symbols in one curated library — separate from KiCad's
 stock libraries, which are wiped on update — means a part is never trapped
 inside a single project again.
+
+`browse` is a full-screen arrow-key menu over the same operations: drill from
+your curated library or any project into its symbols and pluck one, without
+touching a flag. It's a thin shell — every action it performs is also a
+plain command, so scripts and CI never depend on it. (The menu uses stdlib
+`curses`; interactive, so Unix terminals only. The rest of the tool is
+cross-platform.)
 
 ### `size`
 
