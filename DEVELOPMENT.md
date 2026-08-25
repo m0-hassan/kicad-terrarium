@@ -110,16 +110,19 @@ over pluck; logic in the tested `core.browse` state machine), plus ergonomics
   auto-guess project_roots (KiCad version-dir churn makes guesses wrong).
 - **`pluck --from a-schematic`**: also read a `.kicad_sch`'s embedded
   `lib_symbols` cache as a source (recover a symbol whose library was lost).
+- **`prune`**: trim every project-local library down to exactly the symbols
+  the schematic references. Keeps projects minimal regardless of how much was
+  plucked while exploring; a read-the-refs-and-filter op, terrarium-shaped.
 - **footprint sealing** (`fp-lib-table` is the same format; `resolve.py`
   already resolves it) — copy `.pretty` + 3D models, rewrite model paths to
   `${KIPRJMOD}` (audit already flags non-portable ones).
 - **orphan recovery**: search paths for a library containing a missing symbol.
-- polish: an ambient swaying-plant animation in the `browse` menu corner.
 
-Rejected: a *consolidate* mode (merge into one project-named lib, rewrite all
-refs). Destructive, non-idempotent (noisy git diffs), collision-prone, drops
-provenance. Shadow (current `seal`) wins on every engineering axis; consolidate
-was only aesthetically nicer. See the shadowing note above.
+Default strategy is *shadow* (many local libs, original names, refs untouched),
+not *consolidate* (one project-named lib, refs rewritten). The full reasoning —
+and what both terms mean — is in `docs/shadow-vs-consolidate.md`. Consolidate is
+not rejected outright, but if ever built it's an explicit archival-export mode,
+never the default.
 
 Note: the curses render/input loop in `cli._run_browser` is the one piece not
 covered by pytest (needs a real TTY). Its logic lives in `core.browse` (tested);
