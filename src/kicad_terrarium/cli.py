@@ -299,11 +299,16 @@ def _find_projects(roots: list[Path]) -> list[Path]:
 
 
 def _source_files(source: Path) -> list[Path]:
-    """The .kicad_sym files a --from target offers: itself, or a project's libs."""
+    """The .kicad_sym files a source target offers: itself, or a project's libs."""
     if source.is_file() and source.suffix == ".kicad_sym":
         return [source]
     project_dir = source if source.is_dir() else source.parent
     return _local_libraries(project_dir)
+
+
+def _find_symbol_source(source: Path, symbol: str) -> Path | None:
+    """The .kicad_sym under `source` that defines `symbol`, or None."""
+    return next((f for f in _source_files(source) if symbol in symbol_blocks(f.read_text())), None)
 
 
 @app.command("list")
@@ -364,9 +369,7 @@ def pluck(
         console.print("[red]no --from given and no curated_library configured.[/red]")
         raise typer.Exit(code=2)
 
-    src_file = next(
-        (f for f in _source_files(source) if symbol in symbol_blocks(f.read_text())), None
-    )
+    src_file = _find_symbol_source(source, symbol)
     if src_file is None:
         console.print(f"[red]symbol '{symbol}' not found in {source}[/red]")
         raise typer.Exit(code=1)
@@ -393,7 +396,8 @@ def _pluck(
     parents = sorted(set(additions) - {symbol})
     note = f" (+{parents} inherited)" if parents else ""
     console.print(
-        f"pluck [bold]{symbol}[/bold]{note}  {src_file.name} → library/{lib_name}.kicad_sym"
+        f"pluck [bold]{symbol}[/bold]{note}: {src_file.stem} → {root.parent.name}/library/"
+        f"{lib_name}.kicad_sym"
     )
     if dry_run:
         console.print("[yellow](dry-run) nothing written.[/yellow]")
@@ -412,53 +416,137 @@ def _pluck(
     if existing is not None:
         table.with_suffix(".bak").write_text(existing)
     table.write_text(merge_sym_lib_table(existing, [lib_name]))
+    _report_added(symbol, added, lib_name)
 
+
+def _report_added(symbol: str, added: list[str], lib_name: str) -> None:
     if added:
-        console.print(f"[green]✓ added {added} and registered '{lib_name}'[/green]")
+        console.print(f"[green]✓ added {added} → '{lib_name}'[/green]")
     else:
-        console.print(f"[green]✓ '{symbol}' already present; '{lib_name}' registered[/green]")
+        console.print(f"[green]✓ '{symbol}' already present in '{lib_name}'[/green]")
+
+
+@app.command()
+def sprout(
+    symbol: str = typer.Argument(..., help="Symbol to add to your curated library."),
+    from_: Path | None = typer.Option(
+        None, "--from", help="Source project or .kicad_sym. Default: the project here."
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report only; write nothing."),
+) -> None:
+    """Sprout a symbol up into your curated library, to reuse across projects.
+
+    The mirror of `pluck`: pluck pulls a symbol down into a project; sprout
+    pushes one up into your growing collection. Grow it from real reuse — the
+    moment you think "I'll want this again."
+    """
+    curated = load_config().curated_library
+    if curated is None:
+        console.print("[red]no curated library configured — run 'kt init' first.[/red]")
+        raise typer.Exit(code=2)
+
+    source = from_ or _find_project_root(Path.cwd())
+    if source is None:
+        console.print("[red]no --from given and no single project in this directory.[/red]")
+        raise typer.Exit(code=2)
+    src_file = _find_symbol_source(source, symbol)
+    if src_file is None:
+        console.print(f"[red]symbol '{symbol}' not found in {source}[/red]")
+        raise typer.Exit(code=1)
+
+    _sprout(symbol, src_file, curated, dry_run)
+
+
+def _sprout(symbol: str, src_file: Path, curated: Path, dry_run: bool = False) -> None:
+    """Copy `symbol` (and inherited parents) from src_file into the curated library."""
+    source_text = src_file.read_text()
+    additions, missing = pluck_symbols(source_text, {symbol})
+    if missing:
+        console.print(f"[red]⚠ missing from source: {sorted(missing)}[/red]")
+        raise typer.Exit(code=1)
+
+    parents = sorted(set(additions) - {symbol})
+    note = f" (+{parents} inherited)" if parents else ""
+    console.print(f"sprout [bold]{symbol}[/bold]{note}: {src_file.stem} → {curated.name}")
+    if dry_run:
+        console.print("[yellow](dry-run) nothing written.[/yellow]")
+        return
+
+    dest_text = curated.read_text() if curated.exists() else None
+    if dest_text is not None:
+        curated.with_suffix(".kicad_sym.bak").write_bytes(curated.read_bytes())
+    new_text, added = merge_symbols(dest_text, additions, library_version(source_text))
+    curated.parent.mkdir(parents=True, exist_ok=True)
+    curated.write_text(new_text)
+    _report_added(symbol, added, curated.stem)
 
 
 @dataclass(frozen=True)
 class _PluckAction:
-    """A menu leaf's payload: copy `symbol` from `source` into the project."""
+    """A menu leaf's payload: copy `symbol` from `source` down into the project."""
 
     symbol: str
     source: Path
 
 
-def _symbol_items(lib_file: Path, with_lib_tag: bool) -> list[Item]:
-    """Menu leaves for every symbol in a .kicad_sym, each a pluck action."""
+@dataclass(frozen=True)
+class _SproutAction:
+    """A menu leaf's payload: copy `symbol` from `source` up into the curated library."""
+
+    symbol: str
+    source: Path
+
+
+def _curated_items(lib_file: Path) -> list[Item]:
+    """Curated-library symbols: pluck-only (sprouting into the curated lib is a no-op)."""
+    return [
+        Item(name, action=_PluckAction(name, lib_file))
+        for name in sorted(symbol_blocks(lib_file.read_text()))
+    ]
+
+
+def _project_items(lib_file: Path, dest_name: str, curated_name: str | None) -> list[Item]:
+    """Project symbols: each opens a pluck-here / sprout-up choice."""
     items = []
     for name in sorted(symbol_blocks(lib_file.read_text())):
-        label = f"{name}  [{lib_file.stem}]" if with_lib_tag else name
-        items.append(Item(label, action=_PluckAction(name, lib_file)))
+        choices = [Item(f"Pluck into {dest_name}", action=_PluckAction(name, lib_file))]
+        if curated_name is not None:
+            choices.append(
+                Item(f"Sprout into {curated_name}", action=_SproutAction(name, lib_file))
+            )
+        items.append(Item(f"{name}  [{lib_file.stem}]", children=choices))
     return items
 
 
 def _build_browse_tree(
-    config_curated: Path | None, project_roots: list[Path], exclude: Path | None = None
+    config_curated: Path | None,
+    project_roots: list[Path],
+    dest_name: str,
+    exclude: Path | None = None,
 ) -> Screen:
     """The source-browsing menu: curated library and projects → their symbols.
 
-    `exclude` (the destination project's directory) is left out of the source
-    list, since plucking a project into itself is a no-op.
+    Curated symbols pluck straight into the destination project. Project
+    symbols open a choice: pluck them here, or sprout them up into the curated
+    library. `exclude` (the destination project) is left out of the sources —
+    plucking a project into itself is a no-op.
     """
+    curated_name = config_curated.stem if config_curated else None
     top: list[Item] = []
     if config_curated and config_curated.is_file():
-        top.append(Item("Curated library", children=_symbol_items(config_curated, False)))
+        top.append(Item("Curated library", children=_curated_items(config_curated)))
     projects: list[Item] = []
     for pro in _find_projects(project_roots):
         if exclude is not None and pro.parent.resolve() == exclude.resolve():
             continue
         symbols: list[Item] = []
         for lib in _local_libraries(pro.parent):
-            symbols += _symbol_items(lib, with_lib_tag=True)
+            symbols += _project_items(lib, dest_name, curated_name)
         if symbols:
             projects.append(Item(pro.parent.name, children=symbols))  # folder disambiguates
     if projects:
         top.append(Item("Projects", children=projects))
-    return Screen("kicad-terrarium — pick a symbol to pluck", top)
+    return Screen(f"kicad-terrarium — into {dest_name}", top)
 
 
 # a little potted sprout swaying in a breeze, bottom-right of the menu:
@@ -552,15 +640,18 @@ def browse(
     flag-driven command, so scripts never need the menu.
     """
     if not sys.stdout.isatty():
-        console.print("[red]browse needs an interactive terminal — use 'list' and 'pluck'.[/red]")
+        console.print(
+            "[red]browse needs an interactive terminal — use 'list', 'pluck', 'sprout'.[/red]"
+        )
         raise typer.Exit(code=2)
     root = _resolve_root(into)
 
     config = load_config()
     # exclude the destination project from the sources — plucking a project
     # into itself is always a no-op and only causes confusion.
-    tree = _build_browse_tree(config.curated_library, config.project_roots, exclude=root.parent)
-    tree.title = f"kicad-terrarium — pluck into {root.parent.name}"
+    tree = _build_browse_tree(
+        config.curated_library, config.project_roots, root.parent.name, exclude=root.parent
+    )
     if not tree.items:
         console.print(f"nothing to browse — set curated_library / project_roots in {CONFIG_PATH}.")
         raise typer.Exit(code=1)
@@ -568,8 +659,13 @@ def browse(
     action = _run_browser(tree)
     if isinstance(action, _PluckAction):
         _pluck(action.symbol, action.source, root)
+    elif isinstance(action, _SproutAction):
+        if config.curated_library is None:
+            console.print("[red]no curated library configured — run 'kt init'.[/red]")
+            raise typer.Exit(code=2)
+        _sprout(action.symbol, action.source, config.curated_library)
     else:
-        console.print("[dim]nothing plucked.[/dim]")
+        console.print("[dim]nothing done.[/dim]")
 
 
 _EMPTY_LIBRARY = '(kicad_symbol_lib\n\t(version 20251024)\n\t(generator "kicad-terrarium")\n)\n'
@@ -589,11 +685,14 @@ def init() -> None:
     console.print("[bold]kicad-terrarium setup[/bold] — press Enter to skip a field.\n")
     existing = load_config()
 
-    lib_default = str(existing.curated_library or "")
+    # Suggest a professional, descriptive default: the curated library's name
+    # propagates into every project that uses it (shadow keeps original names),
+    # so a personal handle would leak into shared repos. Neutral name instead.
+    suggested = Path.home() / "Documents/KiCad/libraries/custom_symbols.kicad_sym"
+    lib_default = str(existing.curated_library or suggested)
     lib_in = typer.prompt(
         "Curated symbol library (.kicad_sym) — your reusable parts",
         default=lib_default,
-        show_default=bool(lib_default),
     ).strip()
     curated = Path(lib_in).expanduser() if lib_in else None
     if (

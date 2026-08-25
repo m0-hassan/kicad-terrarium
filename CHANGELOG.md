@@ -15,16 +15,21 @@ First public release.
 - `audit`: read-only lint for unassigned footprints, unresolvable footprint
   references, symbol-pin/footprint-pad mismatches, orphaned sheet files, and
   non-portable 3D model paths.
-- `pluck` (with `list` and a JSON config): copy a named symbol, plus any
-  inherited parents, from a curated library or another project into the
-  current project — forward-vendoring, so a reusable part is never trapped
-  inside one project. `list` browses projects and library symbols; `scan
-  --precise` lists exact symbol names, without opening KiCad.
+- `pluck` / `sprout` (with `list`, `init`, and a JSON config): move a single
+  symbol (plus inherited parents) between a project and your curated library.
+  `pluck` pulls one down into a project before you place it; `sprout` pushes
+  one up into the collection so it grows from real reuse. `list` browses
+  projects and library symbols; `scan --precise` lists exact symbol names,
+  without opening KiCad. `init` is an interactive first-run setup that
+  suggests a descriptive curated-library name (its name propagates into every
+  project via shadowing, so a personal handle is discouraged).
 - `fit`: assign footprints to unassigned resistors and capacitors by value
   (configurable table; 0603/0805 defaults), filling only empty footprints and
   refusing inductors (saturation current is a human decision). Output is
   summarized by package; `--precise` for the full per-part list.
-- `browse`: a full-screen arrow-key menu (stdlib curses) over `list`/`pluck`.
+- `browse`: a full-screen arrow-key menu (stdlib curses) over pluck/sprout,
+  with a swaying potted sprout in the corner. A curated symbol plucks straight
+  into the project; a project symbol opens a pluck-here / sprout-up choice.
   Navigation is a tested pure state machine (`core.browse`); the menu carries
   no logic of its own, so every action remains a plain flag-driven command.
   Unix terminals only.

@@ -25,8 +25,10 @@ short alias for `kicad-terrarium`.)
 | `audit [root]` | Read-only lint: the mechanical gaps that bite during layout |
 | `verify [root]` | Exit 1 unless every used library is registered project-locally |
 | `list [target]` | Browse configured projects, or the symbols in a library or project |
-| `pluck <symbol>` | Copy a symbol (and inherited parents) into a project, before you place it |
-| `browse` | Interactive menu over `list`/`pluck`: arrow-key through libraries and projects |
+| `pluck <symbol>` | Copy a symbol down into a project, before you place it |
+| `sprout <symbol>` | Copy a symbol up into your curated library, to reuse later |
+| `browse` | Interactive menu over pluck/sprout: arrow-key through libraries and projects |
+| `init` | Interactive first-run setup (curated library + project roots) |
 | `fit [root]` | Assign footprints to unassigned resistors and capacitors by value |
 | `graft [root] --old X --new Y` | Rewrite lib references (advanced; only for renaming) |
 
@@ -73,43 +75,50 @@ KiCad's official libraries (a 10-pin comparator paired with SOIC-8, an 8-pin
 switch paired with SC-70-6) — defects that otherwise surface deep into
 layout. `audit` is read-only and safe to run while KiCad is open.
 
-### `list` and `pluck`
+### `list`, `pluck`, and `sprout`
 
-`seal` works backward from what a project already uses. `pluck` works
-forward from intent — it pulls a symbol into a project *before* you place it,
-so you never mine an old project or open KiCad just to reuse a part:
+`seal` works backward from what a project already uses. `pluck` and `sprout`
+work forward from intent, moving a single symbol between a project and your
+**curated library** — the collection of reusable, known-good parts you carry
+across projects:
 
 ```
 $ kt list                          # projects, from your config
-$ kt list ~/lib/mo-parts.kicad_sym # symbols in a library
-$ kt pluck Conn_Coaxial_INVERT     # from your curated library, into the project here
+$ kt list ~/lib/custom_symbols.kicad_sym  # symbols in a library
+$ kt pluck Conn_Coaxial_INVERT     # curated library → the project here
+$ kt sprout OPA320                 # the project here → curated library
 ```
 
-`pluck` defaults its source to a personal **curated library** and its
-destination to the project in the current directory; both are overridable
-(`--from` a library or another project, `--into` a specific project). It
-copies the symbol byte-for-byte with any inherited parents, merges it into
-the project's library without disturbing what's there, and registers it.
-Configure locations in `~/.config/kicad-terrarium/config.json`:
+- **`pluck`** pulls a symbol *down* into a project before you place it, so you
+  never mine an old project or open KiCad to reuse a part. Source defaults to
+  your curated library, destination to the project here (`--from`/`--into` to
+  override).
+- **`sprout`** pushes a symbol *up* into your curated library, so the
+  collection grows from real reuse — the moment you think "I'll want this
+  again."
+
+Both copy byte-for-byte with inherited parents and merge without disturbing
+what's already there. Configure locations with `kt init`, or in
+`~/.config/kicad-terrarium/config.json`:
 
 ```json
 {
-  "curated_library": "~/Documents/KiCad/libraries/mo-parts.kicad_sym",
+  "curated_library": "~/Documents/KiCad/libraries/custom_symbols.kicad_sym",
   "project_roots": ["~/Documents/KiCad/projects"]
 }
 ```
 
-Keeping your reusable symbols in one curated library — separate from KiCad's
-stock libraries, which are wiped on update — means a part is never trapped
-inside a single project again.
+Name the curated library *descriptively*, not after yourself: because sealing
+keeps original names, its name propagates into every project that uses it, so
+`custom_symbols` reads better in a shared repo than a personal handle.
 
-`browse` is a full-screen arrow-key menu over the same operations: drill from
-your curated library or any project into its symbols and pluck one, without
-touching a flag — with a small potted sprout swaying in the corner. It's a thin
-shell: navigation is a tested pure state machine (`core.browse`), and every
-action it performs is also a plain command, so scripts and CI never depend on
-it. (The menu uses stdlib `curses`; interactive, so Unix terminals only. The
-rest of the tool is cross-platform.)
+`browse` is a full-screen arrow-key menu over the same operations, with a small
+potted sprout swaying in the corner. Drill from your curated library or any
+project into its symbols; picking a **project** symbol offers *pluck it here*
+or *sprout it up*, while a **curated** symbol plucks straight in. It's a thin
+shell — navigation is a tested pure state machine (`core.browse`), and every
+action is also a plain command, so scripts never depend on it. (stdlib
+`curses`; Unix terminals only. The rest of the tool is cross-platform.)
 
 ### `fit`
 
