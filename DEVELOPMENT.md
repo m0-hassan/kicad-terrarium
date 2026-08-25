@@ -19,7 +19,7 @@ inside a project). `kt` is a short alias for `kicad-terrarium`.
 
 | command | one line |
 |---|---|
-| `init` | interactive first-run config (curated library + project roots) |
+| `init` | interactive first-run config (vault + project roots) |
 | `scan` | count symbols per library; `--precise` lists exact names |
 | `seal` | copy used symbols into `./library`, register them (the headline op) |
 | `verify` | exit 1 unless every used library is registered locally |
@@ -27,9 +27,8 @@ inside a project). `kt` is a short alias for `kicad-terrarium`.
 | `audit` | read-only lint (pin/pad, unassigned, orphans, model paths) |
 | `list` | browse projects / a library's symbols |
 | `pluck` | copy one symbol (+ parents) down into a project, before placing it |
-| `sprout` | copy one symbol up into the curated library, to reuse later |
+| `sprout` | copy one symbol up into the vault, to reuse later |
 | `browse` | curses arrow-key menu over pluck/sprout (with a swaying plant 🌱) |
-| `init` | interactive first-run config |
 | `graft` | advanced: rewrite a library name across references (rare) |
 
 Nothing is pushed to a remote yet. Config lives at
@@ -147,7 +146,7 @@ In rough priority order:
 - polish: the `browse` menu supports arbitrary trees, so "Sizing rules" / "Config"
   screens could be added; paging for very long symbol lists.
 
-`pluck`/`sprout` are the two directions of the same op (project ⇄ curated
+`pluck`/`sprout` are the two directions of the same op (project ⇄ vault
 library), sharing `_find_symbol_source` + `extract.pluck_symbols`/`merge_symbols`.
 `graft` (reference rename) is deliberately kept but niche — with shadow settled,
 its only real use is fixing/unifying a badly-named library.

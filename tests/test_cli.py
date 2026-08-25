@@ -28,10 +28,10 @@ def test_browse_tree_curated_plucks_directly_projects_offer_choice(tmp_path):
     _make_project(str(roots), "ProjA", "Widget")
 
     tree = _build_browse_tree(curated, [roots], dest_name="Dest")
-    assert [i.label for i in tree.items] == ["Curated library", "Projects"]
+    assert [i.label for i in tree.items] == ["Vault", "Projects"]
 
     # a curated symbol is a direct pluck leaf (no sprout — you're already there)
-    curated_part = next(i for i in tree.items if i.label == "Curated library").children[0]
+    curated_part = next(i for i in tree.items if i.label == "Vault").children[0]
     assert curated_part.children is None
     assert isinstance(curated_part.action, _PluckAction)
 

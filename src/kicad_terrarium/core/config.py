@@ -1,4 +1,4 @@
-"""User configuration: where the curated library and projects live.
+"""User configuration: where the vault and projects live.
 
 Locations only — remembering paths is pure mechanics, not judgment. Stored
 as JSON (stdlib read and write, every supported Python, the same style as

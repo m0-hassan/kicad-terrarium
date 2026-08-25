@@ -26,9 +26,9 @@ short alias for `kicad-terrarium`.)
 | `verify [root]` | Exit 1 unless every used library is registered project-locally |
 | `list [target]` | Browse configured projects, or the symbols in a library or project |
 | `pluck <symbol>` | Copy a symbol down into a project, before you place it |
-| `sprout <symbol>` | Copy a symbol up into your curated library, to reuse later |
+| `sprout <symbol>` | Copy a symbol up into your vault, to reuse later |
 | `browse` | Interactive menu over pluck/sprout: arrow-key through libraries and projects |
-| `init` | Interactive first-run setup (curated library + project roots) |
+| `init` | Interactive first-run setup (vault + project roots) |
 | `fit [root]` | Assign footprints to unassigned resistors and capacitors by value |
 | `graft [root] --old X --new Y` | Rewrite lib references (advanced; only for renaming) |
 
@@ -79,24 +79,22 @@ layout. `audit` is read-only and safe to run while KiCad is open.
 
 `seal` works backward from what a project already uses. `pluck` and `sprout`
 work forward from intent, moving a single symbol between a project and your
-**curated library** — the *greenhouse* where you cultivate reusable, known-good
-parts before transplanting them into projects (the tool calls it your
-greenhouse in its output):
+**vault** — the curated library of reusable, known-good parts you carry across
+projects (`curated_library` in the config; the tool calls it your *vault* in
+its output):
 
 ```
 $ kt list                          # projects, from your config
 $ kt list ~/lib/custom_symbols.kicad_sym  # symbols in a library
-$ kt pluck Conn_Coaxial_INVERT     # curated library → the project here
-$ kt sprout OPA320                 # the project here → curated library
+$ kt pluck Conn_Coaxial_INVERT     # vault → the project here
+$ kt sprout OPA320                 # the project here → vault
 ```
 
 - **`pluck`** pulls a symbol *down* into a project before you place it, so you
   never mine an old project or open KiCad to reuse a part. Source defaults to
-  your curated library, destination to the project here (`--from`/`--into` to
-  override).
-- **`sprout`** pushes a symbol *up* into your curated library, so the
-  collection grows from real reuse — the moment you think "I'll want this
-  again."
+  your vault, destination to the project here (`--from`/`--into` to override).
+- **`sprout`** pushes a symbol *up* into your vault, so it grows from real
+  reuse — the moment you think "I'll want this again."
 
 Both copy byte-for-byte with inherited parents and merge without disturbing
 what's already there. Configure locations with `kt init`, or in
@@ -109,14 +107,14 @@ what's already there. Configure locations with `kt init`, or in
 }
 ```
 
-Name the curated library *descriptively*, not after yourself: because sealing
-keeps original names, its name propagates into every project that uses it, so
+Name your vault *descriptively*, not after yourself: because sealing keeps
+original names, its name propagates into every project that uses it, so
 `custom_symbols` reads better in a shared repo than a personal handle.
 
 `browse` is a full-screen arrow-key menu over the same operations, with a small
-potted sprout swaying in the corner. Drill from your curated library or any
-project into its symbols; picking a **project** symbol offers *pluck it here*
-or *sprout it up*, while a **curated** symbol plucks straight in. It's a thin
+potted sprout swaying in the corner. Drill from your vault or any project into
+its symbols; picking a **project** symbol offers *pluck it here* or *sprout it
+up*, while a **vault** symbol plucks straight in. It's a thin
 shell — navigation is a tested pure state machine (`core.browse`), and every
 action is also a plain command, so scripts never depend on it. (stdlib
 `curses`; Unix terminals only. The rest of the tool is cross-platform.)

@@ -348,7 +348,7 @@ def list_(
 def pluck(
     symbol: str = typer.Argument(..., help="Symbol name to copy into the project."),
     from_: Path | None = typer.Option(
-        None, "--from", help="Source .kicad_sym or project. Default: your curated library."
+        None, "--from", help="Source .kicad_sym or project. Default: your vault."
     ),
     into: Path | None = typer.Option(
         None, "--into", help="Destination project root .kicad_sch. Default: the project here."
@@ -367,7 +367,7 @@ def pluck(
     config = load_config()
     source = from_ or config.curated_library
     if source is None:
-        console.print("[red]no --from given and no curated library — run 'kt init'.[/red]")
+        console.print("[red]no --from given and no vault configured — run 'kt init'.[/red]")
         raise typer.Exit(code=2)
 
     src_file = _find_symbol_source(source, symbol)
@@ -390,9 +390,9 @@ def _short(path: Path) -> str:
 
 
 def _source_label(src_file: Path, curated: Path | None) -> str:
-    """A human tag for where a symbol came from: the greenhouse, or a project."""
+    """A human tag for where a symbol came from: the vault, or a project."""
     if curated is not None and src_file.resolve() == curated.resolve():
-        return f"greenhouse · {src_file.name}"
+        return f"vault · {src_file.name}"
     if src_file.parent.name == "library":  # a project's local library folder
         return f"project {src_file.parent.parent.name} · {src_file.name}"
     return _short(src_file)
@@ -447,13 +447,13 @@ def _pluck(
 
 @app.command()
 def sprout(
-    symbol: str = typer.Argument(..., help="Symbol to add to your curated library."),
+    symbol: str = typer.Argument(..., help="Symbol to add to your vault."),
     from_: Path | None = typer.Option(
         None, "--from", help="Source project or .kicad_sym. Default: the project here."
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Report only; write nothing."),
 ) -> None:
-    """Sprout a symbol up into your curated library, to reuse across projects.
+    """Sprout a symbol up into your vault, to reuse across projects.
 
     The mirror of `pluck`: pluck pulls a symbol down into a project; sprout
     pushes one up into your growing collection. Grow it from real reuse — the
@@ -461,7 +461,7 @@ def sprout(
     """
     curated = load_config().curated_library
     if curated is None:
-        console.print("[red]no curated library configured — run 'kt init' first.[/red]")
+        console.print("[red]no vault configured — run 'kt init' first.[/red]")
         raise typer.Exit(code=2)
 
     source = from_ or _find_project_root(Path.cwd())
@@ -477,7 +477,7 @@ def sprout(
 
 
 def _sprout(symbol: str, src_file: Path, curated: Path, dry_run: bool = False) -> None:
-    """Copy `symbol` (and inherited parents) from src_file into the curated library."""
+    """Copy `symbol` (and inherited parents) from src_file into the vault."""
     source_text = src_file.read_text()
     additions, missing = pluck_symbols(source_text, {symbol})
     if missing:
@@ -488,7 +488,7 @@ def _sprout(symbol: str, src_file: Path, curated: Path, dry_run: bool = False) -
     note = f" (+ {', '.join(parents)})" if parents else ""
     console.print(f"[bold]sprouted[/bold] '{symbol}'{note}")
     console.print(f"  from  {_source_label(src_file, curated)}")
-    console.print(f"  into  greenhouse · {curated.name}  ({_short(curated.parent)}/)")
+    console.print(f"  into  vault · {curated.name}  ({_short(curated.parent)}/)")
     if dry_run:
         console.print("  [yellow](dry-run) nothing written[/yellow]")
         return
@@ -512,7 +512,7 @@ class _PluckAction:
 
 @dataclass(frozen=True)
 class _SproutAction:
-    """A menu leaf's payload: copy `symbol` from `source` up into the curated library."""
+    """A menu leaf's payload: copy `symbol` from `source` up into the vault."""
 
     symbol: str
     source: Path
@@ -545,7 +545,7 @@ def _build_browse_tree(
     dest_name: str,
     exclude: Path | None = None,
 ) -> Screen:
-    """The source-browsing menu: curated library and projects → their symbols.
+    """The source-browsing menu: vault and projects → their symbols.
 
     Curated symbols pluck straight into the destination project. Project
     symbols open a choice: pluck them here, or sprout them up into the curated
@@ -555,7 +555,7 @@ def _build_browse_tree(
     curated_name = config_curated.stem if config_curated else None
     top: list[Item] = []
     if config_curated and config_curated.is_file():
-        top.append(Item("Curated library", children=_curated_items(config_curated)))
+        top.append(Item("Vault", children=_curated_items(config_curated)))
     projects: list[Item] = []
     for pro in _find_projects(project_roots):
         if exclude is not None and pro.parent.resolve() == exclude.resolve():
@@ -682,7 +682,7 @@ def browse(
         _pluck(action.symbol, action.source, root, config.curated_library)
     elif isinstance(action, _SproutAction):
         if config.curated_library is None:
-            console.print("[red]no curated library configured — run 'kt init'.[/red]")
+            console.print("[red]no vault configured — run 'kt init'.[/red]")
             raise typer.Exit(code=2)
         _sprout(action.symbol, action.source, config.curated_library)
     else:
@@ -694,7 +694,7 @@ _EMPTY_LIBRARY = '(kicad_symbol_lib\n\t(version 20251024)\n\t(generator "kicad-t
 
 @app.command()
 def init() -> None:
-    """Set up kicad-terrarium: your curated library and where your projects live.
+    """Set up kicad-terrarium: your vault and where your projects live.
 
     Writes ~/.config/kicad-terrarium/config.json. Both fields are optional —
     press Enter to skip either.
@@ -706,13 +706,13 @@ def init() -> None:
     console.print("[bold]kicad-terrarium setup[/bold] — press Enter to skip a field.\n")
     existing = load_config()
 
-    # Suggest a professional, descriptive default: the curated library's name
+    # Suggest a professional, descriptive default: the vault's name
     # propagates into every project that uses it (shadow keeps original names),
     # so a personal handle would leak into shared repos. Neutral name instead.
     suggested = Path.home() / "Documents/KiCad/libraries/custom_symbols.kicad_sym"
     lib_default = str(existing.curated_library or suggested)
     lib_in = typer.prompt(
-        "Curated symbol library (.kicad_sym) — your reusable parts",
+        "Your vault — a .kicad_sym of reusable parts you carry across projects",
         default=lib_default,
     ).strip()
     curated = Path(lib_in).expanduser() if lib_in else None
