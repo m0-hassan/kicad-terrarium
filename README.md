@@ -105,10 +105,11 @@ inside a single project again.
 
 `browse` is a full-screen arrow-key menu over the same operations: drill from
 your curated library or any project into its symbols and pluck one, without
-touching a flag. It's a thin shell — every action it performs is also a
-plain command, so scripts and CI never depend on it. (The menu uses stdlib
-`curses`; interactive, so Unix terminals only. The rest of the tool is
-cross-platform.)
+touching a flag — with a small potted sprout swaying in the corner. It's a thin
+shell: navigation is a tested pure state machine (`core.browse`), and every
+action it performs is also a plain command, so scripts and CI never depend on
+it. (The menu uses stdlib `curses`; interactive, so Unix terminals only. The
+rest of the tool is cross-platform.)
 
 ### `fit`
 
