@@ -5,9 +5,12 @@ global one (KiCad checks the project table first), so no lib_id in any
 schematic needs rewriting. Merging preserves entries the project already has.
 """
 
+import re
+
 from kicad_terrarium.core.verify import registered_libraries
 
 EMPTY_TABLE = "(sym_lib_table\n\t(version 7)\n)\n"
+_ENTRY_NAME = re.compile(r'\(lib\s*\(name "([^"]+)"\)')
 
 
 def table_entry(name: str) -> str:
@@ -30,3 +33,14 @@ def merge_sym_lib_table(existing: str | None, names: list[str]) -> str:
         return text
     closing = text.rstrip().rfind(")")
     return text.rstrip()[:closing] + additions + ")\n"
+
+
+def remove_from_sym_lib_table(text: str, names: list[str]) -> str:
+    """Drop the `(lib (name "X") ...)` entries for `names` (one entry per line)."""
+    drop = set(names)
+    kept = [
+        line
+        for line in text.splitlines(keepends=True)
+        if not ((m := _ENTRY_NAME.search(line)) and m.group(1) in drop)
+    ]
+    return "".join(kept)

@@ -157,3 +157,17 @@ def merge_symbols(
     trimmed = dest_text.rstrip()
     close = trimmed.rfind(")")  # the library's closing paren
     return trimmed[:close] + "\n".join(additions[n] for n in added) + "\n)\n", added
+
+
+def prune_library(lib_text: str, used: set[str]) -> tuple[str, list[str], list[str]]:
+    """Rewrite a library keeping only `used` symbols and their extends parents.
+
+    A parent kept only because a used symbol inherits from it stays even when
+    it isn't referenced directly. Returns (new text, kept names parents-first,
+    removed names).
+    """
+    blocks = symbol_blocks(lib_text)
+    keep_ordered, _missing = extends_closure(used & set(blocks), blocks)
+    keep = set(keep_ordered)
+    removed = [name for name in blocks if name not in keep]
+    return assemble_library(keep_ordered, blocks, lib_text), keep_ordered, removed

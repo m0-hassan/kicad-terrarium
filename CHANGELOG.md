@@ -23,6 +23,10 @@ First public release.
   without opening KiCad. `init` is an interactive first-run setup that
   suggests a descriptive vault name (its name propagates into every
   project via shadowing, so a personal handle is discouraged).
+- `prune`: trim each project-local library to exactly the symbols the
+  schematic references (inherited parents kept), and drop any library left
+  entirely unused (file + registration) — the answer to symbols left behind by
+  plucking-and-not-placing.
 - `fit`: assign footprints to unassigned resistors and capacitors by value
   (configurable table; 0603/0805 defaults), filling only empty footprints and
   refusing inductors (saturation current is a human decision). Output is

@@ -30,6 +30,7 @@ short alias for `kicad-terrarium`.)
 | `browse` | Interactive menu over pluck/sprout: arrow-key through libraries and projects |
 | `init` | Interactive first-run setup (vault + project roots) |
 | `fit [root]` | Assign footprints to unassigned resistors and capacitors by value |
+| `prune [root]` | Trim project-local libraries to exactly the symbols used |
 | `graft [root] --old X --new Y` | Rewrite lib references (advanced; only for renaming) |
 
 ### `seal`
@@ -110,6 +111,11 @@ what's already there. Configure locations with `kt init`, or in
 Name your vault *descriptively*, not after yourself: because sealing keeps
 original names, its name propagates into every project that uses it, so
 `custom_symbols` reads better in a shared repo than a personal handle.
+
+Explored a lot and plucked symbols you didn't end up placing? **`prune`** trims
+every project-local library back to exactly the symbols the schematic uses
+(keeping inherited parents), and drops any library left entirely unused — so a
+project stays minimal no matter how much you tried.
 
 `browse` is a full-screen arrow-key menu over the same operations, with a small
 potted sprout swaying in the corner. Drill from your vault or any project into

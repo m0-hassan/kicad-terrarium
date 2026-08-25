@@ -13,7 +13,7 @@ below).
 
 ## Current state (v1.0)
 
-Feature-complete and green: 67 tests, `ruff`/`mypy` clean. Ten commands, all
+Feature-complete and green: 74 tests, `ruff`/`mypy` clean. Eleven commands, all
 with `--dry-run` + `.bak` where they write, and cwd-defaulting (run bare from
 inside a project). `kt` is a short alias for `kicad-terrarium`.
 
@@ -24,6 +24,7 @@ inside a project). `kt` is a short alias for `kicad-terrarium`.
 | `seal` | copy used symbols into `./library`, register them (the headline op) |
 | `verify` | exit 1 unless every used library is registered locally |
 | `fit` | assign footprints to unassigned R/C by value; `--precise` per-part |
+| `prune` | trim project-local libraries to exactly the symbols used |
 | `audit` | read-only lint (pin/pad, unassigned, orphans, model paths) |
 | `list` | browse projects / a library's symbols |
 | `pluck` | copy one symbol (+ parents) down into a project, before placing it |
@@ -130,9 +131,6 @@ way it does.
 
 In rough priority order:
 
-- **`prune`** — trim each project-local library to exactly the symbols the
-  schematic references. Keeps a project minimal no matter how much was plucked
-  while exploring; the answer to pluck "bloat." A read-refs-then-filter op.
 - **footprint sealing** — the other half of portability. `fp-lib-table` is the
   same format `resolve.py` already handles; add copying `.pretty` + 3D models
   and rewriting model paths to `${KIPRJMOD}` (`audit` already flags the

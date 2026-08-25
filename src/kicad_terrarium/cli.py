@@ -27,6 +27,7 @@ from kicad_terrarium.core.extract import (
     library_version,
     merge_symbols,
     pluck_symbols,
+    prune_library,
     symbol_blocks,
     vendor_library,
 )
@@ -34,7 +35,7 @@ from kicad_terrarium.core.project import project_lib_ids, project_schematics
 from kicad_terrarium.core.repoint import repoint_text
 from kicad_terrarium.core.resolve import resolve_footprint_libs, resolve_libraries
 from kicad_terrarium.core.sizing import INDUCTOR_SYMBOLS, footprint_for, rules_from_config
-from kicad_terrarium.core.tables import merge_sym_lib_table
+from kicad_terrarium.core.tables import merge_sym_lib_table, remove_from_sym_lib_table
 from kicad_terrarium.core.verify import external_libraries, registered_libraries
 
 # The typer "app" is the container all of our commands attach to.
@@ -797,6 +798,61 @@ def fit(
         )
     if not dry_run and applied:
         console.print("run [bold]audit[/bold] to check pin/pad consistency.")
+
+
+@app.command()
+def prune(
+    root: Path | None = typer.Argument(
+        None, help="Root .kicad_sch. Defaults to the project in this directory."
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report only; write nothing."),
+    precise: bool = typer.Option(
+        False, "--precise", help="List the removed symbol names, not just counts."
+    ),
+) -> None:
+    """Trim project-local libraries to exactly the symbols the schematic uses.
+
+    Removes symbols left behind by plucking-and-not-placing (inherited parents
+    are kept), and drops any library that ends up entirely unused — so a
+    project stays minimal no matter how much you explored.
+    """
+    root = _resolve_root(root)
+    project_dir = root.parent
+    all_ids = project_lib_ids(root)
+
+    removed_total = 0
+    dropped: list[str] = []
+    for lib_file in _local_libraries(project_dir):
+        used = used_symbols(all_ids, lib_file.stem)
+        new_text, kept, removed = prune_library(lib_file.read_text(), used)
+        if not removed:
+            continue
+        removed_total += len(removed)
+        detail = f": {removed}" if precise else ""
+        if kept:
+            console.print(f"  {lib_file.stem}: kept {len(kept)}, removed {len(removed)}{detail}")
+        else:
+            dropped.append(lib_file.stem)
+            console.print(f"  {lib_file.stem}: [yellow]dropped[/yellow] (nothing used){detail}")
+        if not dry_run:
+            lib_file.with_suffix(".kicad_sym.bak").write_bytes(lib_file.read_bytes())
+            lib_file.write_text(new_text) if kept else lib_file.unlink()
+
+    if dropped and not dry_run:
+        table = project_dir / "sym-lib-table"
+        if table.exists():
+            existing = table.read_text()
+            table.with_suffix(".bak").write_text(existing)
+            table.write_text(remove_from_sym_lib_table(existing, dropped))
+
+    if removed_total == 0:
+        console.print("[green]✓ already minimal — nothing to prune.[/green]")
+        return
+    verb = "would remove" if dry_run else "removed"
+    tag = " [yellow](dry-run)[/yellow]" if dry_run else ""
+    note = f", dropped {len(dropped)} empty" if dropped else ""
+    plural = "s" if removed_total != 1 else ""
+    console.print(f"[bold]{verb} {removed_total} unused symbol{plural}{note}[/bold]{tag}")
 
 
 @app.command()
