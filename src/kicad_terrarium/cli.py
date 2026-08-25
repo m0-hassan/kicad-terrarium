@@ -16,7 +16,7 @@ from kicad_terrarium.core.audit import (
     pad_names,
 )
 from kicad_terrarium.core.browse import Browser, Item, Screen
-from kicad_terrarium.core.config import CONFIG_PATH, load_config
+from kicad_terrarium.core.config import CONFIG_PATH, Config, dump_config, load_config
 from kicad_terrarium.core.discover import (
     library_counts,
     reassign_footprints,
@@ -540,6 +540,53 @@ def browse(
         console.print("[dim]nothing plucked.[/dim]")
 
 
+_EMPTY_LIBRARY = '(kicad_symbol_lib\n\t(version 20251024)\n\t(generator "kicad-terrarium")\n)\n'
+
+
+@app.command()
+def init() -> None:
+    """Set up kicad-terrarium: your curated library and where your projects live.
+
+    Writes ~/.config/kicad-terrarium/config.json. Both fields are optional —
+    press Enter to skip either.
+    """
+    if not sys.stdin.isatty():
+        console.print(f"[red]init is interactive; edit {CONFIG_PATH} directly instead.[/red]")
+        raise typer.Exit(code=2)
+
+    console.print("[bold]kicad-terrarium setup[/bold] — press Enter to skip a field.\n")
+    existing = load_config()
+
+    lib_default = str(existing.curated_library or "")
+    lib_in = typer.prompt(
+        "Curated symbol library (.kicad_sym) — your reusable parts",
+        default=lib_default,
+        show_default=bool(lib_default),
+    ).strip()
+    curated = Path(lib_in).expanduser() if lib_in else None
+    if (
+        curated
+        and not curated.exists()
+        and typer.confirm(f"{curated} doesn't exist — create an empty library there?", default=True)
+    ):
+        curated.parent.mkdir(parents=True, exist_ok=True)
+        curated.write_text(_EMPTY_LIBRARY)
+        console.print(f"[green]created {curated}[/green]")
+
+    roots_default = ", ".join(str(p) for p in existing.project_roots)
+    roots_in = typer.prompt(
+        "Folder(s) holding your KiCad projects, comma-separated",
+        default=roots_default,
+        show_default=bool(roots_default),
+    )
+    roots = [Path(r.strip()).expanduser() for r in roots_in.split(",") if r.strip()]
+
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(dump_config(Config(curated, roots, existing.sizing)))
+    console.print(f"\n[green]✓ wrote {CONFIG_PATH}[/green]")
+    console.print("Try [bold]kt list[/bold] to see your projects, or [bold]kt browse[/bold].")
+
+
 @app.command()
 def fit(
     root: Path | None = typer.Argument(
@@ -605,6 +652,9 @@ def audit(
     root: Path | None = typer.Argument(
         None, help="Root .kicad_sch to lint. Defaults to the project in this directory."
     ),
+    precise: bool = typer.Option(
+        False, "--precise", help="List every finding, not just the first few per category."
+    ),
 ) -> None:
     """Read-only lint: report the mechanical gaps that bite during layout.
 
@@ -630,11 +680,15 @@ def audit(
     def section(title: str, rows: list[str]) -> None:
         nonlocal findings
         unique = sorted(set(rows))  # multi-unit symbols yield one row per placed unit
-        if unique:
-            findings += len(unique)
-            console.print(f"[red]✗ {title}[/red] ({len(unique)})")
-            for row in unique:
-                console.print(f"  • {row}")
+        if not unique:
+            return
+        findings += len(unique)
+        console.print(f"[red]✗ {title}[/red] ({len(unique)})")
+        shown = unique if precise else unique[:8]
+        for row in shown:
+            console.print(f"  • {row}")
+        if len(unique) > len(shown):
+            console.print(f"  [dim]… {len(unique) - len(shown)} more (--precise for all)[/dim]")
 
     section(
         "unassigned footprints",
