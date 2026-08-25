@@ -79,8 +79,9 @@ layout. `audit` is read-only and safe to run while KiCad is open.
 
 `seal` works backward from what a project already uses. `pluck` and `sprout`
 work forward from intent, moving a single symbol between a project and your
-**curated library** — the collection of reusable, known-good parts you carry
-across projects:
+**curated library** — the *greenhouse* where you cultivate reusable, known-good
+parts before transplanting them into projects (the tool calls it your
+greenhouse in its output):
 
 ```
 $ kt list                          # projects, from your config

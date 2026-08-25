@@ -364,9 +364,10 @@ def pluck(
     forward from intent, pulling a symbol in *before* you place it — so you
     never have to mine an old project or open KiCad just to reuse a part.
     """
-    source = from_ or load_config().curated_library
+    config = load_config()
+    source = from_ or config.curated_library
     if source is None:
-        console.print("[red]no --from given and no curated_library configured.[/red]")
+        console.print("[red]no --from given and no curated library — run 'kt init'.[/red]")
         raise typer.Exit(code=2)
 
     src_file = _find_symbol_source(source, symbol)
@@ -379,13 +380,39 @@ def pluck(
         console.print("[red]no --into given and no single project in the current directory.[/red]")
         raise typer.Exit(code=2)
 
-    _pluck(symbol, src_file, root, as_lib, dry_run)
+    _pluck(symbol, src_file, root, config.curated_library, as_lib, dry_run)
+
+
+def _short(path: Path) -> str:
+    """Path with the home directory abbreviated to ~, so lines don't wrap."""
+    text, home = str(path), str(Path.home())
+    return "~" + text[len(home) :] if text.startswith(home) else text
+
+
+def _source_label(src_file: Path, curated: Path | None) -> str:
+    """A human tag for where a symbol came from: the greenhouse, or a project."""
+    if curated is not None and src_file.resolve() == curated.resolve():
+        return f"greenhouse · {src_file.name}"
+    if src_file.parent.name == "library":  # a project's local library folder
+        return f"project {src_file.parent.parent.name} · {src_file.name}"
+    return _short(src_file)
+
+
+def _result_line(added: list[str]) -> str:
+    if added:
+        return f"  [green]✓ wrote {len(added)} symbol{'s' if len(added) != 1 else ''}[/green]"
+    return "  [dim]· already present — nothing changed[/dim]"
 
 
 def _pluck(
-    symbol: str, src_file: Path, root: Path, as_lib: str | None = None, dry_run: bool = False
+    symbol: str,
+    src_file: Path,
+    root: Path,
+    curated: Path | None = None,
+    as_lib: str | None = None,
+    dry_run: bool = False,
 ) -> None:
-    """Copy `symbol` (and inherited parents) from src_file into root's project."""
+    """Copy `symbol` (and inherited parents) from src_file down into root's project."""
     source_text = src_file.read_text()
     additions, missing = pluck_symbols(source_text, {symbol})
     if missing:
@@ -394,13 +421,12 @@ def _pluck(
 
     lib_name = as_lib or src_file.stem
     parents = sorted(set(additions) - {symbol})
-    note = f" (+{parents} inherited)" if parents else ""
-    console.print(
-        f"pluck [bold]{symbol}[/bold]{note}: {src_file.stem} → {root.parent.name}/library/"
-        f"{lib_name}.kicad_sym"
-    )
+    note = f" (+ {', '.join(parents)})" if parents else ""
+    console.print(f"[bold]plucked[/bold] '{symbol}'{note}")
+    console.print(f"  from  {_source_label(src_file, curated)}")
+    console.print(f"  into  {root.parent.name}/library/{lib_name}.kicad_sym")
     if dry_run:
-        console.print("[yellow](dry-run) nothing written.[/yellow]")
+        console.print("  [yellow](dry-run) nothing written[/yellow]")
         return
 
     dest_file = root.parent / "library" / f"{lib_name}.kicad_sym"
@@ -416,14 +442,7 @@ def _pluck(
     if existing is not None:
         table.with_suffix(".bak").write_text(existing)
     table.write_text(merge_sym_lib_table(existing, [lib_name]))
-    _report_added(symbol, added, lib_name)
-
-
-def _report_added(symbol: str, added: list[str], lib_name: str) -> None:
-    if added:
-        console.print(f"[green]✓ added {added} → '{lib_name}'[/green]")
-    else:
-        console.print(f"[green]✓ '{symbol}' already present in '{lib_name}'[/green]")
+    console.print(_result_line(added))
 
 
 @app.command()
@@ -466,10 +485,12 @@ def _sprout(symbol: str, src_file: Path, curated: Path, dry_run: bool = False) -
         raise typer.Exit(code=1)
 
     parents = sorted(set(additions) - {symbol})
-    note = f" (+{parents} inherited)" if parents else ""
-    console.print(f"sprout [bold]{symbol}[/bold]{note}: {src_file.stem} → {curated.name}")
+    note = f" (+ {', '.join(parents)})" if parents else ""
+    console.print(f"[bold]sprouted[/bold] '{symbol}'{note}")
+    console.print(f"  from  {_source_label(src_file, curated)}")
+    console.print(f"  into  greenhouse · {curated.name}  ({_short(curated.parent)}/)")
     if dry_run:
-        console.print("[yellow](dry-run) nothing written.[/yellow]")
+        console.print("  [yellow](dry-run) nothing written[/yellow]")
         return
 
     dest_text = curated.read_text() if curated.exists() else None
@@ -478,7 +499,7 @@ def _sprout(symbol: str, src_file: Path, curated: Path, dry_run: bool = False) -
     new_text, added = merge_symbols(dest_text, additions, library_version(source_text))
     curated.parent.mkdir(parents=True, exist_ok=True)
     curated.write_text(new_text)
-    _report_added(symbol, added, curated.stem)
+    console.print(_result_line(added))
 
 
 @dataclass(frozen=True)
@@ -658,7 +679,7 @@ def browse(
 
     action = _run_browser(tree)
     if isinstance(action, _PluckAction):
-        _pluck(action.symbol, action.source, root)
+        _pluck(action.symbol, action.source, root, config.curated_library)
     elif isinstance(action, _SproutAction):
         if config.curated_library is None:
             console.print("[red]no curated library configured — run 'kt init'.[/red]")
