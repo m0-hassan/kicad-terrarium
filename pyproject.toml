@@ -25,6 +25,7 @@ dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.0"]
 
 [project.scripts]
 kicad-terrarium = "kicad_terrarium.cli:app"
+kt = "kicad_terrarium.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]

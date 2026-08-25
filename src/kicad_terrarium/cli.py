@@ -1,4 +1,5 @@
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -85,13 +86,20 @@ def main(ctx: typer.Context) -> None:
 
 @app.command()
 def scan(
-    path: Path = typer.Argument(
-        ..., exists=True, readable=True, help="A .kicad_sch or .kicad_pcb file to inspect."
+    path: Path | None = typer.Argument(
+        None, help="A .kicad_sch to inspect. Defaults to the project in this directory."
+    ),
+    precise: bool = typer.Option(
+        False, "--precise", help="List the exact symbol names used, not just per-library counts."
     ),
 ) -> None:
     """
     Report libraries used across a schematic and all its sub-sheets.
+
+    With --precise, list the exact symbol names too — handy for spelling a
+    name correctly before `pluck`.
     """
+    path = _resolve_root(path)
     sheets = project_schematics(path)
     all_ids = project_lib_ids(path)
     counts = library_counts(all_ids)
@@ -102,17 +110,28 @@ def scan(
         f"{len(counts)} libraries across {total} symbols:"
     )
 
+    if not precise:
+        for lib, n in counts.most_common():
+            console.print(f"  • {lib}: {n}")
+        return
+
+    names_by_lib: dict[str, set[str]] = {}
+    for lib_id in all_ids:
+        lib, _, symbol = lib_id.partition(":")
+        names_by_lib.setdefault(lib, set()).add(symbol)
     for lib, n in counts.most_common():
-        console.print(f"  • {lib}: {n}")
+        console.print(f"  [bold]{lib}[/bold] ({n})")
+        for symbol in sorted(names_by_lib[lib]):
+            console.print(f"    {symbol}")
 
 
 @app.command()
-def vendor(
-    root: Path = typer.Argument(
-        ..., exists=True, readable=True, help="Root .kicad_sch of the project."
+def seal(
+    root: Path | None = typer.Argument(
+        None, help="Root .kicad_sch. Defaults to the project in the current directory."
     ),
     source: Path | None = typer.Option(
-        None, "--source", help="Override: vendor one library from this .kicad_sym."
+        None, "--source", help="Override: seal one library from this .kicad_sym."
     ),
     library: str | None = typer.Option(None, "--library", help="Override: that library's name."),
     output: Path | None = typer.Option(None, "--output", help="Override: where to write it."),
@@ -120,26 +139,29 @@ def vendor(
         False, "--dry-run", help="Report what would happen, write nothing."
     ),
 ) -> None:
-    """Vendor every library the project uses into ./library and register it.
+    """Seal every library the project uses into ./library and register it.
 
-    Without flags, reads the project and global sym-lib-tables to find each
-    library's source file, copies the used symbols (plus inherited parents)
-    byte-for-byte, and registers the copies so they shadow the originals.
-    Libraries with no table entry are reported as orphaned, and can be
-    vendored one at a time with --source/--library/--output.
+    ("Sealing" is *vendoring* in software terms: copy your dependencies in so
+    the project no longer relies on the outside world.) Reads the project and
+    global sym-lib-tables to find each library's source, copies the used
+    symbols (plus inherited parents) byte-for-byte, and registers the copies
+    under their original names so they shadow the originals — no schematic
+    reference is rewritten. Libraries with no table entry are reported as
+    orphaned, and can be sealed one at a time with --source/--library/--output.
     """
+    root = _resolve_root(root)
     all_ids = project_lib_ids(root)
 
     if source or library or output:
         if not (source and library and output):
             console.print("[red]--source, --library and --output must be given together.[/red]")
             raise typer.Exit(code=2)
-        _vendor_one(source, used_symbols(all_ids, library), library, output, dry_run)
+        _seal_one(source, used_symbols(all_ids, library), library, output, dry_run)
         return
 
     project_dir = root.parent
     lib_map = resolve_libraries(project_dir)
-    vendored: list[str] = []
+    sealed: list[str] = []
     orphaned: list[str] = []
 
     for lib_name, n_refs in sorted(library_counts(all_ids).items()):
@@ -151,26 +173,26 @@ def vendor(
             console.print(f"{lib_name}: already project-local ({n_refs} refs) - skipped")
             continue
         out_path = project_dir / "library" / f"{lib_name}.kicad_sym"
-        _vendor_one(src_path, used_symbols(all_ids, lib_name), lib_name, out_path, dry_run)
-        vendored.append(lib_name)
+        _seal_one(src_path, used_symbols(all_ids, lib_name), lib_name, out_path, dry_run)
+        sealed.append(lib_name)
 
-    if vendored and not dry_run:
+    if sealed and not dry_run:
         table_path = project_dir / "sym-lib-table"
         existing = table_path.read_text() if table_path.exists() else None
         if existing is not None:
             table_path.with_suffix(".bak").write_text(existing)
-        table_path.write_text(merge_sym_lib_table(existing, vendored))
-        console.print(f"[green]✓ registered {len(vendored)} libraries in sym-lib-table[/green]")
+        table_path.write_text(merge_sym_lib_table(existing, sealed))
+        console.print(f"[green]✓ registered {len(sealed)} libraries in sym-lib-table[/green]")
 
     if orphaned:
-        console.print(f"[yellow]⚠ orphaned (no table entry, not vendored):[/yellow] {orphaned}")
-        console.print("  vendor these manually with --source/--library/--output.")
+        console.print(f"[yellow]⚠ orphaned (no table entry, not sealed):[/yellow] {orphaned}")
+        console.print("  seal these manually with --source/--library/--output.")
     if not dry_run:
         console.print("run [bold]verify[/bold] to confirm the project is self-contained.")
 
 
-def _vendor_one(source: Path, wanted: set[str], library: str, output: Path, dry_run: bool) -> None:
-    """Vendor one library file; shared by auto and manual modes."""
+def _seal_one(source: Path, wanted: set[str], library: str, output: Path, dry_run: bool) -> None:
+    """Seal one library file; shared by auto and manual modes."""
     lib_text, kept, missing = vendor_library(source.read_text(), wanted)
 
     parents = len(kept) - len(wanted - missing)  # kept beyond the found wanted = parents pulled in
@@ -190,15 +212,23 @@ def _vendor_one(source: Path, wanted: set[str], library: str, output: Path, dry_
 
 
 @app.command()
-def repoint(
-    root: Path = typer.Argument(
-        ..., exists=True, readable=True, help="Root .kicad_sch of a COPY (this rewrites files)."
+def graft(
+    root: Path | None = typer.Argument(
+        None, help="Root .kicad_sch (this rewrites files). Defaults to the project here."
     ),
     old_library: str = typer.Option(..., "--old", help="Library name to replace."),
     new_library: str = typer.Option(..., "--new", help="Library name to use instead."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Report only; change nothing."),
 ) -> None:
-    """Rewrite every lib reference from --old to --new across a project's sheets."""
+    """Graft references from one library name onto another across all sheets.
+
+    Advanced/niche: rewrites the library-name part of every reference (both
+    placed instances and the lib_symbols cache), like grafting a plant onto
+    new roots. It does NOT create or move the target library — that's on you.
+    The normal `seal` workflow keeps original names, so you rarely need this;
+    it's here for deliberately renaming or merging libraries.
+    """
+    root = _resolve_root(root)
     total = 0
     for sheet in project_schematics(root):
         new_text, n = repoint_text(sheet.read_text(), old_library, new_library)
@@ -226,6 +256,24 @@ def _find_project_root(directory: Path) -> Path | None:
         return None
     root = pros[0].with_suffix(".kicad_sch")
     return root if root.is_file() else None
+
+
+def _resolve_root(root: Path | None) -> Path:
+    """A given root .kicad_sch, or the project in the current directory.
+
+    Lets `seal`, `verify`, `scan`, `fit`, `audit` be run bare from inside a
+    project (like git), instead of always retyping the schematic path.
+    """
+    if root is not None:
+        if not root.is_file():
+            console.print(f"[red]{root} not found.[/red]")
+            raise typer.Exit(code=2)
+        return root
+    found = _find_project_root(Path.cwd())
+    if found is None:
+        console.print("[red]no .kicad_sch given and no single project in this directory.[/red]")
+        raise typer.Exit(code=2)
+    return found
 
 
 def _local_libraries(project_dir: Path) -> list[Path]:
@@ -388,13 +436,21 @@ def _symbol_items(lib_file: Path, with_lib_tag: bool) -> list[Item]:
     return items
 
 
-def _build_browse_tree(config_curated: Path | None, project_roots: list[Path]) -> Screen:
-    """The source-browsing menu: curated library and projects → their symbols."""
+def _build_browse_tree(
+    config_curated: Path | None, project_roots: list[Path], exclude: Path | None = None
+) -> Screen:
+    """The source-browsing menu: curated library and projects → their symbols.
+
+    `exclude` (the destination project's directory) is left out of the source
+    list, since plucking a project into itself is a no-op.
+    """
     top: list[Item] = []
     if config_curated and config_curated.is_file():
         top.append(Item("Curated library", children=_symbol_items(config_curated, False)))
     projects: list[Item] = []
     for pro in _find_projects(project_roots):
+        if exclude is not None and pro.parent.resolve() == exclude.resolve():
+            continue
         symbols: list[Item] = []
         for lib in _local_libraries(pro.parent):
             symbols += _symbol_items(lib, with_lib_tag=True)
@@ -466,13 +522,13 @@ def browse(
     if not sys.stdout.isatty():
         console.print("[red]browse needs an interactive terminal — use 'list' and 'pluck'.[/red]")
         raise typer.Exit(code=2)
-    root = into or _find_project_root(Path.cwd())
-    if root is None:
-        console.print("[red]no project here; pass --into <root.kicad_sch>.[/red]")
-        raise typer.Exit(code=2)
+    root = _resolve_root(into)
 
     config = load_config()
-    tree = _build_browse_tree(config.curated_library, config.project_roots)
+    # exclude the destination project from the sources — plucking a project
+    # into itself is always a no-op and only causes confusion.
+    tree = _build_browse_tree(config.curated_library, config.project_roots, exclude=root.parent)
+    tree.title = f"kicad-terrarium — pluck into {root.parent.name}"
     if not tree.items:
         console.print(f"nothing to browse — set curated_library / project_roots in {CONFIG_PATH}.")
         raise typer.Exit(code=1)
@@ -485,33 +541,36 @@ def browse(
 
 
 @app.command()
-def size(
-    root: Path = typer.Argument(
-        ..., exists=True, readable=True, help="Root .kicad_sch of the project."
+def fit(
+    root: Path | None = typer.Argument(
+        None, help="Root .kicad_sch. Defaults to the project in this directory."
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Report only; write nothing."),
+    precise: bool = typer.Option(
+        False, "--precise", help="List every part, not just per-package counts."
+    ),
 ) -> None:
-    """Assign footprints to unassigned resistors and capacitors by value.
+    """Fit footprints to unassigned resistors and capacitors by value.
 
-    Uses a size table (0603 up to 1 µF, 0805 above; all resistors 0603 by
+    Uses a value table (0603 up to 1 µF, 0805 above; all resistors 0603 by
     default — override under "sizing" in the config). Only fills empty
     footprints; never overwrites. Inductors are left alone on purpose:
     their package depends on saturation current, which is your call.
     """
+    root = _resolve_root(root)
     rules = rules_from_config(load_config().sizing)
 
     def decide(ref: str, lib_id: str, value: str, current: str) -> str | None:
         return None if current else footprint_for(lib_id, value, rules)
 
-    total = 0
+    applied: list[tuple[str, str]] = []
     inductors: set[str] = set()
     for sheet in project_schematics(root):
         text = sheet.read_text()
-        new_text, applied = reassign_footprints(text, decide)
-        for ref, fp in sorted(set(applied)):  # multi-unit symbols report once
-            console.print(f"  {ref} → {fp.split(':', 1)[-1]}")
-        total += len(set(applied))
-        if applied and not dry_run:
+        new_text, changed = reassign_footprints(text, decide)
+        changed = sorted(set(changed))  # multi-unit symbols count once
+        applied += changed
+        if changed and not dry_run:
             sheet.with_suffix(sheet.suffix + ".bak").write_bytes(sheet.read_bytes())
             sheet.write_text(new_text)
         inductors |= {
@@ -520,22 +579,31 @@ def size(
             if not fp and lib_id.split(":", 1)[-1] in INDUCTOR_SYMBOLS
         }
 
+    if precise:
+        for ref, fp in sorted(applied):
+            console.print(f"  {ref} → {fp.split(':', 1)[-1]}")
+    else:  # compressed: one line per package, so 100 passives don't flood
+        for fp, n in sorted(Counter(fp for _, fp in applied).items()):
+            console.print(f"  {n:>3} × {fp.split(':', 1)[-1]}")
+
     verb = "would assign" if dry_run else "assigned"
     tag = " [yellow](dry-run)[/yellow]" if dry_run else ""
-    console.print(f"[bold]{verb} {total} footprint{'s' if total != 1 else ''}[/bold]{tag}")
+    hint = "" if precise or not applied else "  [dim](--precise for the full list)[/dim]"
+    n = len(applied)
+    console.print(f"[bold]{verb} {n} footprint{'s' if n != 1 else ''}[/bold]{tag}{hint}")
     if inductors:
         console.print(
             f"[dim]left for you: {sorted(inductors)} — inductor package depends on "
             f"saturation current, not value.[/dim]"
         )
-    if not dry_run and total:
+    if not dry_run and applied:
         console.print("run [bold]audit[/bold] to check pin/pad consistency.")
 
 
 @app.command()
 def audit(
-    root: Path = typer.Argument(
-        ..., exists=True, readable=True, help="Root .kicad_sch of the project to lint."
+    root: Path | None = typer.Argument(
+        None, help="Root .kicad_sch to lint. Defaults to the project in this directory."
     ),
 ) -> None:
     """Read-only lint: report the mechanical gaps that bite during layout.
@@ -545,6 +613,7 @@ def audit(
     that will not travel. Exits 1 if anything is found; safe to run while
     KiCad is open.
     """
+    root = _resolve_root(root)
     sheets = project_schematics(root)
     project_dir = root.parent
 
@@ -618,11 +687,12 @@ def audit(
 
 @app.command()
 def verify(
-    root: Path = typer.Argument(
-        ..., exists=True, readable=True, help="Root .kicad_sch of the project to check."
+    root: Path | None = typer.Argument(
+        None, help="Root .kicad_sch to check. Defaults to the project in this directory."
     ),
 ) -> None:
     """Confirm every library the project uses is registered locally."""
+    root = _resolve_root(root)
     used = set(library_counts(project_lib_ids(root)))  # library names referenced
 
     table = root.parent / "sym-lib-table"  # the project's registration

@@ -37,9 +37,18 @@ src/kicad_terrarium/
         tables.py        # sym-lib-table emission + merge
         audit.py         # pad_names, cache_symbol_pins, missing_pads,
                          #   foreign_model_paths
-        repoint.py       # repoint_text (anchored str.replace)
+        sizing.py        # value parsers + value→package Rules (fit command)
+        config.py        # JSON config: curated library, project roots, sizing
+        browse.py        # pure menu state machine (Browser/Screen/Item)
+        repoint.py       # repoint_text (anchored str.replace) — the `graft` command
         verify.py        # registered_libraries, external_libraries
 ```
+
+**Command vs module names.** User-facing command names are chosen for the
+audience (EEs): `seal` (= the vendoring op in `extract.py`), `fit` (=
+`sizing.py`), `graft` (= `repoint.py`). Internal function names keep the
+operation term (`vendor_library`, `repoint_text`) since they describe *what*
+the code does. Don't "fix" the mismatch — it's deliberate.
 
 **Core rule:** `core/` functions are pure (data in → data out). Where a file
 must be read (`project.py`), the reader is an injected
@@ -58,8 +67,12 @@ real paths (`test_resolve.py`).
   (OPA2197xD→NCS2325D…); a vendored lib without parents parses but cannot
   be drawn.
 - **Shadowing beats repointing.** A project-table entry with the same name
-  as a global library wins; vendoring + registering needs no lib_id
-  rewrites. `repoint` exists only for renames.
+  as a global library wins; sealing + registering needs no lib_id rewrites.
+  This is why `seal` uses the *shadow* strategy (many local libs, original
+  names) rather than *consolidate* (one project-named lib, all refs rewritten):
+  shadow is non-destructive, idempotent (clean git diffs), collision-free, and
+  keeps provenance. Consolidate was considered and rejected — its only win is
+  aesthetic. `graft` (`repoint_text`) exists only for deliberate renames.
 - **KiCad 10 global tables nest**: `(type "Table")` entries point at the
   stock table; resolution follows one level. Table spacing differs between
   KiCad 9 (`(name "x")(type`) and 10 (`(name "x") (type`) — the entry regex
@@ -70,7 +83,7 @@ real paths (`test_resolve.py`).
   SOIC-8 for a 10-pin part; TMUX6119 default SC-70-6 for an 8-pin part) —
   which is why `audit`'s pin/pad check exists and why "matches the stock
   default" is not proof of correctness.
-- `scan` counts **instances**; `vendor` keeps **unique definitions**.
+- `scan` counts **instances**; `seal` keeps **unique definitions**.
   Multi-unit symbols yield one instance block per placed unit — dedupe by
   reference when reporting per-component.
 - Old-format (v5) footprint files use unquoted pad names; `audit.pad_names`
@@ -87,17 +100,26 @@ project while KiCad has it open (lock files: `~<name>.kicad_sch.lck`).
 
 ## Roadmap
 
-Done: `pluck`/`list`/config, `size` (R/C value→package), and `browse` (curses
-arrow-key menu over pluck; navigation is the pure `core.browse` state machine,
-so the TUI holds no logic). Next, in order:
+Done: `pluck`/`list`/config, `fit` (R/C value→package), `browse` (curses menu
+over pluck; logic in the tested `core.browse` state machine), plus ergonomics
+(`kt` alias, cwd-defaulting, compressed output, `scan --precise`). Next:
 
-- **`browse` extensions**: the menu supports arbitrary Item trees, so add
-  "Sizing rules" and "Config" screens (edit config from the menu) when wanted;
-  and consider paging for very long symbol lists.
-- **footprint vendoring** (`fp-lib-table` is the same format; `resolve.py`
-  already resolves it) — plus copying `.pretty` and 3D models, and rewriting
-  model paths to `${KIPRJMOD}` (audit already flags non-portable ones).
+- **`init` command**: first-run prompt for `curated_library` and
+  `project_roots`. Offer to create an empty curated library; do NOT default it
+  to KiCad's global library (that's stock parts, not curated) and do NOT
+  auto-guess project_roots (KiCad version-dir churn makes guesses wrong).
+- **`pluck --from a-schematic`**: also read a `.kicad_sch`'s embedded
+  `lib_symbols` cache as a source (recover a symbol whose library was lost).
+- **footprint sealing** (`fp-lib-table` is the same format; `resolve.py`
+  already resolves it) — copy `.pretty` + 3D models, rewrite model paths to
+  `${KIPRJMOD}` (audit already flags non-portable ones).
 - **orphan recovery**: search paths for a library containing a missing symbol.
+- polish: an ambient swaying-plant animation in the `browse` menu corner.
+
+Rejected: a *consolidate* mode (merge into one project-named lib, rewrite all
+refs). Destructive, non-idempotent (noisy git diffs), collision-prone, drops
+provenance. Shadow (current `seal`) wins on every engineering axis; consolidate
+was only aesthetically nicer. See the shadowing note above.
 
 Note: the curses render/input loop in `cli._run_browser` is the one piece not
 covered by pytest (needs a real TTY). Its logic lives in `core.browse` (tested);

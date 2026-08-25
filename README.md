@@ -14,22 +14,26 @@ so CI can watch it.
 
 ## Commands
 
+Most commands default to the project in the current directory, so from inside
+a project you can just run `kt seal`, `kt verify`, `kt audit`. (`kt` is a
+short alias for `kicad-terrarium`.)
+
 | Command | What it does |
 |---------|-------------|
-| `scan <root.kicad_sch>` | Walk all sub-sheets, count symbols per library |
-| `vendor <root>` | Copy every used symbol into `./library/`, register it, one command |
-| `audit <root>` | Read-only lint: the mechanical gaps that bite during layout |
-| `verify <root>` | Exit 1 unless every used library is registered project-locally |
+| `scan [root]` | Count symbols per library (`--precise` lists exact names) |
+| `seal [root]` | Copy every used symbol into `./library/`, register it, one command |
+| `audit [root]` | Read-only lint: the mechanical gaps that bite during layout |
+| `verify [root]` | Exit 1 unless every used library is registered project-locally |
 | `list [target]` | Browse configured projects, or the symbols in a library or project |
 | `pluck <symbol>` | Copy a symbol (and inherited parents) into a project, before you place it |
 | `browse` | Interactive menu over `list`/`pluck`: arrow-key through libraries and projects |
-| `size <root>` | Assign footprints to unassigned resistors and capacitors by value |
-| `repoint <root> --old X --new Y` | Rewrite lib references (only needed when renaming) |
+| `fit [root]` | Assign footprints to unassigned resistors and capacitors by value |
+| `graft [root] --old X --new Y` | Rewrite lib references (advanced; only for renaming) |
 
-### `vendor`
+### `seal`
 
 ```
-$ kicad-terrarium vendor board.kicad_sch
+$ kt seal
 Device: 7 used -> 7 symbols
   ✓ wrote library/Device.kicad_sym
 MCU_ST_STM32G4: 1 used -> 2 symbols (+1 inherited parents)
@@ -38,13 +42,15 @@ MCU_ST_STM32G4: 1 used -> 2 symbols (+1 inherited parents)
 ✓ registered 8 libraries in sym-lib-table
 ```
 
-It reads the project and global `sym-lib-table`s (including KiCad 10's
-nested stock-table indirection) to find each library's source, copies the
-used symbols **byte-for-byte** — plus every `extends` parent, without which
-a vendored library silently cannot be drawn — and registers the copies under
-their original names so they shadow the globals. No schematic file is
-touched: shadowing makes reference rewriting unnecessary. Libraries with no
-table entry are reported as orphaned, vendorable one at a time with
+"Sealing" is *vendoring* in software terms — copying your dependencies in so
+the project no longer relies on the outside world. It reads the project and
+global `sym-lib-table`s (including KiCad 10's nested stock-table indirection)
+to find each library's source, copies the used symbols **byte-for-byte** —
+plus every `extends` parent, without which a sealed library silently cannot
+be drawn — and registers the copies under their original names so they shadow
+the globals. No schematic file is touched: shadowing keeps the operation
+non-destructive and idempotent (safe to re-run before every commit). Libraries
+with no table entry are reported as orphaned, sealable one at a time with
 `--source/--library/--output`.
 
 Byte-for-byte matters: structural parsers can silently drop what they don't
@@ -69,15 +75,14 @@ layout. `audit` is read-only and safe to run while KiCad is open.
 
 ### `list` and `pluck`
 
-`vendor` works backward from what a project already uses. `pluck` works
+`seal` works backward from what a project already uses. `pluck` works
 forward from intent — it pulls a symbol into a project *before* you place it,
 so you never mine an old project or open KiCad just to reuse a part:
 
 ```
-$ kicad-terrarium list                          # projects, from your config
-$ kicad-terrarium list ~/lib/mo-parts.kicad_sym # symbols in a library
-$ kicad-terrarium pluck Conn_Coaxial_INVERT     # from your curated library
-  into the project in the current directory
+$ kt list                          # projects, from your config
+$ kt list ~/lib/mo-parts.kicad_sym # symbols in a library
+$ kt pluck Conn_Coaxial_INVERT     # from your curated library, into the project here
 ```
 
 `pluck` defaults its source to a personal **curated library** and its
@@ -105,11 +110,11 @@ plain command, so scripts and CI never depend on it. (The menu uses stdlib
 `curses`; interactive, so Unix terminals only. The rest of the tool is
 cross-platform.)
 
-### `size`
+### `fit`
 
 Passive package is partly a function of value: a 10 µF needs more physical
 volume than a 100 nF, and an undersized MLCC quietly loses capacitance to
-DC-bias derating. `size` assigns footprints to unassigned resistors and
+DC-bias derating. `fit` assigns footprints to unassigned resistors and
 capacitors from a value table (default: all R at 0603; C at 0603 up to 1 µF,
 0805 above), fills only empty footprints, and **leaves inductors alone** —
 their package depends on saturation current, which no value reveals. Override
@@ -135,7 +140,7 @@ live in DEVELOPMENT.md.
 
 ## Roadmap
 
-- footprints: vendor `.pretty` libraries and 3D models the same way
+- footprints: seal `.pretty` libraries and 3D models the same way
   (`fp-lib-table` is the same format)
 - configurable value→package rules for passives (capacitors and resistors
   only — inductor packages depend on saturation current, which is a
