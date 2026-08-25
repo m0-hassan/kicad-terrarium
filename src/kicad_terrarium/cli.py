@@ -461,6 +461,32 @@ def _build_browse_tree(
     return Screen("kicad-terrarium — pick a symbol to pluck", top)
 
 
+# a little potted sprout swaying in a breeze, bottom-right of the menu:
+# center, lean-right, center, lean-left
+_PLANT_FRAMES = [
+    [" ,(), ", "  \\|/ ", "   |  ", "  \\_/ "],
+    [" ,(), ", "   \\|/", "   |  ", "  \\_/ "],
+    [" ,(), ", "  \\|/ ", "   |  ", "  \\_/ "],
+    [" ,(), ", "  \\|/ ", "  \\|  ", "  \\_/ "],
+]
+
+
+def _draw_plant(stdscr, height: int, width: int, frame: int) -> None:
+    """Draw the swaying sprout in the bottom-right corner, if it fits."""
+    import curses
+
+    art = _PLANT_FRAMES[frame % len(_PLANT_FRAMES)]
+    art_w = max(len(line) for line in art)
+    if height < len(art) + 6 or width < art_w + 2:  # too small — skip gracefully
+        return
+    top, left = height - len(art) - 1, width - art_w - 1
+    for i, line in enumerate(art):
+        try:
+            stdscr.addnstr(top + i, left, line, art_w, curses.A_DIM)
+        except Exception:  # writing the last cell can raise; harmless
+            pass
+
+
 def _run_browser(root: Screen) -> object | None:
     """Drive the curses menu; return the chosen leaf action, or None."""
     import curses
@@ -469,7 +495,9 @@ def _run_browser(root: Screen) -> object | None:
 
     def loop(stdscr) -> None:
         curses.curs_set(0)
+        stdscr.timeout(450)  # ms: wake to sway the plant even without a keypress
         browser = Browser(root)
+        frame = 0
         while True:
             stdscr.erase()
             height, width = stdscr.getmaxyx()
@@ -489,7 +517,11 @@ def _run_browser(root: Screen) -> object | None:
                     curses.A_REVERSE if selected else curses.A_NORMAL,
                 )
             stdscr.addnstr(height - 1, 0, "↑↓ move · ⏎ select · ← back · q quit", width - 1)
+            _draw_plant(stdscr, height, width, frame)
             key = stdscr.getch()
+            if key == -1:  # timeout: no input, just let the plant sway
+                frame += 1
+                continue
             if key in (ord("q"), 27):  # q or Esc
                 return
             if key in (curses.KEY_UP, ord("k")):
