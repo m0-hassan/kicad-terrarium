@@ -11,11 +11,9 @@ from rich.markup import escape
 from kicad_terrarium.commands.common import (
     apply_plan,
     console,
-    emit_json,
     fail,
     load_user_config,
     resolve_root,
-    runtime,
     short_path,
 )
 from kicad_terrarium.core.config import CONFIG_PATH, Config, dump_config
@@ -98,38 +96,11 @@ def init(
 
     if dry_run:
         apply_plan(plan, dry_run=True)
-        create_folder = (
-            selected_vault is not None
-            and selected_vault.suffix != ".kicad_sym"
-            and not selected_vault.exists()
-        )
-        if runtime.json_output:
-            emit_json(
-                {
-                    "ok": True,
-                    "dry_run": True,
-                    "config": CONFIG_PATH,
-                    "vault": selected_vault,
-                    "project_roots": selected_roots,
-                    "create_vault_folder": create_folder,
-                }
-            )
-        elif not plan.changes:
+        if not plan.changes:
             console().print(status_line(UNCHANGED, "configuration already matches"))
         return
     changed = apply_plan(plan, dry_run=False)
-    if runtime.json_output:
-        emit_json(
-            {
-                "ok": True,
-                "config": str(CONFIG_PATH),
-                "vault": selected_vault,
-                "project_roots": selected_roots,
-                "changed": changed,
-            }
-        )
-    else:
-        console().print(status_line(DONE if changed else UNCHANGED, short_path(CONFIG_PATH)))
+    console().print(status_line(DONE if changed else UNCHANGED, short_path(CONFIG_PATH)))
 
 
 def fit(
@@ -161,21 +132,6 @@ def fit(
     except (OSError, UnicodeError, ValueError, SExprError, MutationError) as error:
         fail(str(error), code=2)
     changed = apply_plan(result.plan, dry_run=dry_run)
-    if runtime.json_output:
-        emit_json(
-            {
-                "ok": True,
-                "dry_run": dry_run,
-                "profile": rules.name,
-                "policy": rules.description,
-                "assigned": result.applied,
-                "inductors_left_unassigned": result.skipped_inductors,
-                "polarized_capacitors_left_unassigned": result.skipped_polarized_capacitors,
-                "changed": changed,
-            }
-        )
-        return
-
     console().print(f"[dim]policy: {escape(rules.description)}[/dim]")
     if precise:
         for reference, footprint in sorted(result.applied):

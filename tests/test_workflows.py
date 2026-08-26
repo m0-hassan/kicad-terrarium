@@ -9,7 +9,6 @@ from kicad_terrarium.core.verify import verify_project
 from kicad_terrarium.core.workflows import (
     WorkflowError,
     plan_pluck,
-    plan_prune,
     plan_seal,
 )
 
@@ -26,15 +25,6 @@ def _project(tmp_path: Path, lib_id: str = "Foo:A") -> Path:
     )
     (tmp_path / "board.kicad_pro").write_text("{}")
     return root
-
-
-def test_pluck_rejects_path_like_destination_nickname(tmp_path):
-    source = tmp_path / "source.kicad_sym"
-    source.write_text(LIB.format(name="A"))
-    symbol = find_symbol_sources(source, "A")[0]
-    root = _project(tmp_path / "project")
-    with pytest.raises(ValueError, match="unsafe"):
-        plan_pluck(symbol, root, as_library="../../escape")
 
 
 def test_pluck_rejects_same_name_different_definition(tmp_path):
@@ -63,27 +53,10 @@ def test_pluck_preserves_nested_source_identity_in_its_project_namespace(tmp_pat
     result = plan_pluck(symbol, root)
     result.plan.apply()
 
-    assert result.library == "Terrarium__sensors__environmental"
     assert result.destination == (root.parent / "library/terrarium/sensors/environmental.kicad_sym")
     assert (
         '(name "Terrarium__sensors__environmental")' in (root.parent / "sym-lib-table").read_text()
     )
-
-
-def test_prune_uses_table_nickname_instead_of_filename(tmp_path):
-    root = _project(tmp_path, "Alias:A")
-    library = tmp_path / "library"
-    library.mkdir()
-    target = library / "physical-name.kicad_sym"
-    target.write_text('(kicad_symbol_lib (version 20251024) (symbol "A") (symbol "Unused"))')
-    (tmp_path / "sym-lib-table").write_text(
-        '(sym_lib_table (lib (name "Alias")(type "KiCad")'
-        '(uri "${KIPRJMOD}/library/physical-name.kicad_sym")))'
-    )
-    result = plan_prune(root)
-    result.plan.apply()
-    assert set(symbol_blocks(target.read_text())) == {"A"}
-    assert "Alias" not in result.dropped
 
 
 def test_seal_fails_before_writing_when_definition_is_missing(tmp_path, monkeypatch):
@@ -178,7 +151,6 @@ def test_seal_migrates_a_managed_shadow_and_keeps_global_search_available(tmp_pa
     )
 
     result = plan_seal(root)
-    assert result.rewritten == {"Foo": "Terrarium__Foo"}
     result.plan.apply()
 
     target = project / "library/terrarium/Foo.kicad_sym"
@@ -195,7 +167,6 @@ def test_seal_migrates_a_managed_shadow_and_keeps_global_search_available(tmp_pa
     assert verify_project(root).ok
 
     second = plan_seal(root)
-    assert second.rewritten == {}
     assert second.plan.changes == []
 
 

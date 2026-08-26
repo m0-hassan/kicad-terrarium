@@ -44,15 +44,6 @@ def missing_pads(pins: set[str], pads: set[str]) -> set[str]:
     return pins - pads
 
 
-def foreign_model_paths(mod_text: str) -> list[str]:
-    """3D model references that are neither project-local nor stock KiCad."""
-    return [
-        path
-        for path in _MODEL.findall(mod_text)
-        if not path.startswith("${KIPRJMOD}") and not is_stock_model_path(path)
-    ]
-
-
 def is_stock_model_path(path: str) -> bool:
     """Whether a model URI uses a recognized KiCad installation variable."""
     return _STOCK_MODEL.match(path) is not None

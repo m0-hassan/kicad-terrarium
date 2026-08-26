@@ -1,7 +1,7 @@
 import pytest
 
 from kicad_terrarium.core.discover import placed_symbols, reassign_footprints
-from kicad_terrarium.core.repoint import repoint_text
+from kicad_terrarium.core.repoint import repoint_libraries
 from kicad_terrarium.core.sexpr import (
     SExprError,
     apply_replacements,
@@ -40,8 +40,8 @@ def test_repoint_never_changes_descriptions_or_values():
     text = """(kicad_sch
       (lib_symbols (symbol "old:A" (property "Description" "old:do not edit")))
       (symbol (lib_id "old:A") (property "Value" "old:A")))"""
-    output, count = repoint_text(text, "old", "new")
-    assert count == 2
+    output, counts = repoint_libraries(text, {"old": "new"})
+    assert counts == {"old": 2}
     assert '(symbol "new:A"' in output
     assert '(lib_id "new:A")' in output
     assert '"old:do not edit"' in output

@@ -1,39 +1,38 @@
 import pytest
 
 from kicad_terrarium.core.tables import (
-    merge_sym_lib_table,
     parse_library_entries,
     portable_project_uri,
     remove_from_sym_lib_table,
-    upsert_sym_lib_table,
     upsert_sym_lib_uris,
     validate_library_nickname,
 )
-from kicad_terrarium.core.verify import registered_libraries
 
 
-def test_merge_into_empty_creates_valid_table():
-    out = merge_sym_lib_table(None, ["Device", "power"])
-    assert registered_libraries(out) == {"Device", "power"}
-    assert out.startswith("(sym_lib_table") and out.rstrip().endswith(")")
+def _names(text: str) -> set[str]:
+    return {entry.nickname for entry in parse_library_entries(text)}
 
 
-def test_merge_preserves_existing_entries_and_skips_duplicates():
-    existing = (
-        "(sym_lib_table\n\t(version 7)\n"
-        '\t(lib (name "mine")(type "KiCad")(uri "${KIPRJMOD}/library/custom.kicad_sym")'
-        '(options "")(descr "hand-made"))\n)\n'
-    )
-    out = merge_sym_lib_table(existing, ["mine", "Device"])
-    assert registered_libraries(out) == {"mine", "Device"}
-    assert "hand-made" in out  # existing entry untouched, not rewritten
-    assert out.count('(name "mine")') == 1
+def test_parser_handles_compact_and_spaced_table_fields():
+    for entry in (
+        '(lib (name "a")(type "KiCad")(uri "/tmp/a.kicad_sym")(options ""))',
+        '(lib (name "a") (type "KiCad") (uri "/tmp/a.kicad_sym") (options ""))',
+    ):
+        [parsed] = parse_library_entries(f"(sym_lib_table {entry})")
+        assert (parsed.nickname, parsed.library_type, parsed.uri) == (
+            "a",
+            "KiCad",
+            "/tmp/a.kicad_sym",
+        )
 
 
 def test_remove_from_sym_lib_table_drops_named_entries_only():
-    table = merge_sym_lib_table(None, ["Device", "power", "mo-parts"])
+    table = """(sym_lib_table
+  (lib (name "Device")(type "KiCad")(uri "/tmp/Device.kicad_sym"))
+  (lib (name "power")(type "KiCad")(uri "/tmp/power.kicad_sym"))
+  (lib (name "mo-parts")(type "KiCad")(uri "/tmp/mo-parts.kicad_sym")))"""
     out = remove_from_sym_lib_table(table, ["mo-parts"])
-    assert registered_libraries(out) == {"Device", "power"}
+    assert _names(out) == {"Device", "power"}
     assert out.startswith("(sym_lib_table") and out.rstrip().endswith(")")
 
 
@@ -43,21 +42,9 @@ def test_remove_handles_multiline_and_single_line_entries():
     (name "drop")
     (type "KiCad")
     (uri "/tmp/drop.kicad_sym"))
-  (lib (name "keep")(type "KiCad")(uri "/tmp/keep.kicad_sym")))"""
+    (lib (name "keep")(type "KiCad")(uri "/tmp/keep.kicad_sym")))"""
     out = remove_from_sym_lib_table(table, ["drop"])
-    assert registered_libraries(out) == {"keep"}
-
-
-def test_upsert_replaces_external_registration_with_canonical_local_uri():
-    table = '(sym_lib_table (lib (name "Foo")(type "KiCad")(uri "/outside/Foo.kicad_sym")))'
-    out = upsert_sym_lib_table(table, ["Foo"])
-    assert out.count('(name "Foo")') == 1
-    assert "${KIPRJMOD}/library/Foo.kicad_sym" in out
-
-
-def test_merge_deduplicates_duplicate_requested_names():
-    out = merge_sym_lib_table(None, ["Foo", "Foo"])
-    assert out.count('(name "Foo")') == 1
+    assert _names(out) == {"keep"}
 
 
 def test_upsert_explicit_uri_preserves_noncanonical_project_layout():

@@ -9,7 +9,7 @@ from typing import Any, cast
 
 import typer
 
-from kicad_terrarium.commands.common import console, fail, load_user_config, resolve_root, runtime
+from kicad_terrarium.commands.common import console, fail, load_user_config, resolve_root
 from kicad_terrarium.commands.transfer import _execute_pluck, _execute_sprout, _find_projects
 from kicad_terrarium.core.browse import Browser, Item, Screen, search_items
 from kicad_terrarium.core.library import (
@@ -40,12 +40,6 @@ def _curated_source_items(library: LibrarySource) -> list[Item]:
     ]
 
 
-def _curated_items(lib_file: Path) -> list[Item]:
-    """Compatibility helper for one packed vault file."""
-    libraries = discover_libraries(lib_file)
-    return _curated_source_items(libraries[0]) if libraries else []
-
-
 def _project_source_items(
     library: LibrarySource,
     dest_name: str,
@@ -68,12 +62,6 @@ def _project_source_items(
             )
         items.append(Item(f"{name}  [{library.nickname}]", children=choices))
     return items
-
-
-def _project_items(lib_file: Path, dest_name: str, curated_name: str | None) -> list[Item]:
-    """Compatibility helper for a packed project library."""
-    libraries = discover_libraries(lib_file)
-    return _project_source_items(libraries[0], dest_name, curated_name) if libraries else []
 
 
 @dataclass
@@ -250,11 +238,6 @@ def browse(
     ),
 ) -> None:
     """Search and browse vault/project symbols, then pluck or sprout one."""
-    if runtime.json_output:
-        fail(
-            "browse is interactive and cannot be combined with --json; use list/pluck/sprout",
-            code=2,
-        )
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         fail("browse needs an interactive input/output terminal; use list/pluck/sprout", code=2)
     root = resolve_root(into)

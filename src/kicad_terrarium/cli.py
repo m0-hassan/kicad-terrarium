@@ -10,28 +10,9 @@ import typer
 
 from kicad_terrarium import __version__
 from kicad_terrarium.commands import browser, inspect, setup, transfer
-from kicad_terrarium.commands.browser import (
-    _build_browse_tree,
-    _PluckAction,
-    _run_browser,
-    _SproutAction,
-)
 from kicad_terrarium.commands.common import configure, console
-from kicad_terrarium.commands.transfer import _pluck, _sprout
 from kicad_terrarium.core.config import ConfigError, load_config
-from kicad_terrarium.presentation import Theme, line_colors, render_banner
-
-__all__ = [
-    "_PluckAction",
-    "_SproutAction",
-    "_build_browse_tree",
-    "_pluck",
-    "_run_browser",
-    "_sprout",
-    "app",
-    "line_colors",
-    "render_banner",
-]
+from kicad_terrarium.presentation import Theme, render_banner
 
 
 class ColorChoice(str, Enum):
@@ -76,11 +57,6 @@ def main(
         "--theme",
         help="Background-aware botanical palette: auto, dark, or light.",
     ),
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        help="Emit stable machine-readable output.",
-    ),
 ) -> None:
     """Configure output once, before dispatching a command."""
     if version:
@@ -94,20 +70,14 @@ def main(
             configured_theme = load_config().theme
         except ConfigError:
             pass
-    configure(
-        color=color.value,
-        json_output=json_output,
-    )
+    configure(color=color.value)
     if ctx.invoked_subcommand is None:
-        if sys.stdout.isatty() and not json_output:
+        if sys.stdout.isatty():
             console().print(render_banner(cast(Theme, configured_theme)))
-        if json_output:
-            typer.echo(f'{{"name":"kicad-terrarium","version":"{__version__}"}}')
-        else:
-            console().print(
-                f"kicad-terrarium {__version__}  "
-                "[dim]custom symbols in; self-contained projects out[/dim]"
-            )
+        console().print(
+            f"kicad-terrarium {__version__}  "
+            "[dim]custom symbols in; self-contained projects out[/dim]"
+        )
 
 
 inspect.register(app)

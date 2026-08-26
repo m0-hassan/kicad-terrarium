@@ -1,20 +1,20 @@
-from kicad_terrarium.core.repoint import repoint_libraries, repoint_text
+from kicad_terrarium.core.repoint import repoint_libraries
 
 
 def test_repoint_rewrites_instance_and_cache_together():
-    text = 'lib_id "old:C" (symbol "old: C"'
-    result, count = repoint_text(text, "old", "new")
+    text = '(kicad_sch (lib_id "old:C") (symbol "old: C"))'
+    result, counts = repoint_libraries(text, {"old": "new"})
 
-    assert result == 'lib_id "new:C" (symbol "new: C"'
-    assert count == 2
+    assert result == '(kicad_sch (lib_id "new:C") (symbol "new: C"))'
+    assert counts == {"old": 2}
 
 
 def test_repoint_leaves_other_libraries_untouched():
-    text = 'lib_id "old:C" (lib_id "keep: C"'
-    result, count = repoint_text(text, "old", "new")
+    text = '(kicad_sch (lib_id "old:C") (lib_id "keep: C"))'
+    result, counts = repoint_libraries(text, {"old": "new"})
 
     assert "keep" in result and "old" not in result
-    assert count == 1
+    assert counts == {"old": 1}
 
 
 def test_repoint_libraries_rewrites_multiple_sources_in_one_parse():

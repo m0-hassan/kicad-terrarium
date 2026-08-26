@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 from rich.markup import escape
 
-from kicad_terrarium.commands.common import console, emit_json, fail, resolve_root, runtime
+from kicad_terrarium.commands.common import console, fail, resolve_root
 from kicad_terrarium.core.audit import (
     cache_symbol_pins,
     is_stock_model_path,
@@ -52,24 +52,6 @@ def scan(
         library, separator, symbol = lib_id.partition(":")
         if separator:
             names[library].add(symbol)
-
-    if runtime.json_output:
-        emit_json(
-            {
-                "ok": True,
-                "project": str(root),
-                "sheets": [str(sheet) for sheet in sheets],
-                "libraries": [
-                    {
-                        "name": library,
-                        "placements": count,
-                        "symbols": sorted(names[library]) if precise else None,
-                    }
-                    for library, count in counts.most_common()
-                ],
-            }
-        )
-        return
 
     console().print(
         f"[bold]{escape(root.name)}[/bold]  "
@@ -274,19 +256,6 @@ def audit(
     except (OSError, ValueError, SExprError) as error:
         fail(f"cannot audit project: {error}", code=2)
 
-    if runtime.json_output:
-        emit_json(
-            {
-                "ok": not findings,
-                "project": str(project),
-                "physical_placements": physical_count,
-                "findings": findings,
-            }
-        )
-        if findings:
-            raise typer.Exit(code=1)
-        return
-
     grouped: dict[str, list[Diagnostic]] = defaultdict(list)
     for finding in findings:
         grouped[finding.code or "finding"].append(finding)
@@ -313,27 +282,16 @@ def verify(
     """Prove every used symbol source exists inside the project."""
     project = resolve_root(root)
     report = verify_project(project)
-    if runtime.json_output:
-        emit_json(
-            {
-                "ok": report.ok,
-                "project": str(project),
-                "libraries": report.libraries,
-                "symbols": report.symbols,
-                "diagnostics": report.diagnostics,
-            }
-        )
-    else:
-        for diagnostic in report.diagnostics:
-            status = ERROR if diagnostic.level == "error" else WARNING
-            console().print(status_line(status, diagnostic.message))
-        if report.ok:
-            console().print(
-                status_line(
-                    DONE,
-                    f"source-complete; {report.libraries} libraries, {report.symbols} symbols",
-                )
+    for diagnostic in report.diagnostics:
+        status = ERROR if diagnostic.level == "error" else WARNING
+        console().print(status_line(status, diagnostic.message))
+    if report.ok:
+        console().print(
+            status_line(
+                DONE,
+                f"source-complete; {report.libraries} libraries, {report.symbols} symbols",
             )
+        )
     if not report.ok:
         raise typer.Exit(code=1)
 

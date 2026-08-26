@@ -8,7 +8,12 @@ import re
 import sys
 from pathlib import Path
 
-from kicad_terrarium.core.models import Diagnostic, ResolutionResult, ResolvedLibrary
+from kicad_terrarium.core.models import (
+    Diagnostic,
+    DiagnosticLevel,
+    ResolutionResult,
+    ResolvedLibrary,
+)
 from kicad_terrarium.core.tables import parse_library_entries
 
 _VARIABLE = re.compile(r"\$\{([^}]+)\}")
@@ -33,19 +38,8 @@ def default_share_dir() -> Path:
     return Path("/usr/share/kicad")
 
 
-MAC_SHARE = Path("/Applications/KiCad/KiCad.app/Contents/SharedSupport")
-MAC_CONFIG = Path.home() / "Library/Preferences/kicad"
 DEFAULT_SHARE = default_share_dir()
 DEFAULT_CONFIG = default_config_dir()
-
-
-def parse_lib_table(table_text: str) -> list[tuple[str, str, str]]:
-    """Compatibility view of parsed table rows as ``(name, type, uri)``."""
-    stripped = table_text.strip()
-    wrapped = f"(sym_lib_table {stripped})" if stripped.startswith("(lib") else table_text
-    return [
-        (entry.nickname, entry.library_type, entry.uri) for entry in parse_library_entries(wrapped)
-    ]
 
 
 def _builtin_value(name: str, share_dir: Path) -> str | None:
@@ -139,14 +133,8 @@ def _resolve(
     variables = _config_variables(global_table)
     seen_tables: set[Path] = set()
 
-    def diagnostic(level: str, message: str, path: Path | None, code: str) -> None:
-        # Literal is narrowed by this small checked boundary.
-        if level == "error":
-            result.diagnostics.append(Diagnostic("error", message, path, code))
-        elif level == "warning":
-            result.diagnostics.append(Diagnostic("warning", message, path, code))
-        else:
-            result.diagnostics.append(Diagnostic("info", message, path, code))
+    def diagnostic(level: DiagnosticLevel, message: str, path: Path | None, code: str) -> None:
+        result.diagnostics.append(Diagnostic(level, message, path, code))
 
     def load(
         table_path: Path, *, project_scope: bool, nested: bool = False
@@ -166,7 +154,6 @@ def _resolve(
             entries = parse_library_entries(
                 text,
                 scope="project" if project_scope else ("nested" if nested else "global"),
-                table_path=table_path,
             )
         except (OSError, ValueError) as error:
             diagnostic("error", f"cannot read library table: {error}", table_path, "invalid-table")
@@ -244,7 +231,6 @@ def _resolve(
             project_entries = parse_library_entries(
                 project_table.read_text(encoding="utf-8"),
                 scope="project",
-                table_path=project_table,
             )
             for entry in project_entries:
                 result.libraries.pop(entry.nickname, None)
@@ -282,21 +268,11 @@ def resolve_global_library_details(
     )
 
 
-def resolve_libraries(
-    project_dir: Path,
-    share_dir: Path = DEFAULT_SHARE,
-    config_dir: Path = DEFAULT_CONFIG,
-) -> dict[str, Path]:
-    """Compatibility mapping of resolvable symbol nicknames to paths."""
-    details = _resolve(project_dir, "sym-lib-table", share_dir, config_dir)
-    return {name: library.path for name, library in details.libraries.items()}
-
-
 def resolve_footprint_libs(
     project_dir: Path,
     share_dir: Path = DEFAULT_SHARE,
     config_dir: Path = DEFAULT_CONFIG,
 ) -> dict[str, Path]:
-    """Compatibility mapping of resolvable footprint nicknames to paths."""
+    """Resolve footprint-library nicknames to paths for physical audits."""
     details = _resolve(project_dir, "fp-lib-table", share_dir, config_dir)
     return {name: library.path for name, library in details.libraries.items()}

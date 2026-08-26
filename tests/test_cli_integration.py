@@ -56,20 +56,17 @@ def test_bad_project_error_has_no_traceback(tmp_path):
     assert "Traceback" not in result.stdout + result.stderr
 
 
-def test_scan_and_verify_json_are_machine_readable(tmp_path):
+def test_scan_and_verify_describe_a_source_complete_project(tmp_path):
     root = _project(tmp_path / "project")
-    scan = runner.invoke(app, ["--json", "scan", str(root), "--precise"])
+    scan = runner.invoke(app, ["scan", str(root), "--precise"])
     assert scan.exit_code == 0
-    payload = json.loads(scan.stdout)
-    assert payload["libraries"][0] == {
-        "name": "Local",
-        "placements": 1,
-        "symbols": ["A"],
-    }
+    assert "Local" in scan.stdout
+    assert "A" in scan.stdout
+    assert "1 symbol placement" in scan.stdout
 
-    verify = runner.invoke(app, ["--json", "verify", str(root)])
+    verify = runner.invoke(app, ["verify", str(root)])
     assert verify.exit_code == 0
-    assert json.loads(verify.stdout)["ok"] is True
+    assert "source-complete" in verify.stdout
 
 
 def test_verify_reports_missing_definition_not_just_registration(tmp_path):
@@ -85,17 +82,17 @@ def test_verify_reports_missing_definition_not_just_registration(tmp_path):
 def test_verify_accepts_an_empty_project_without_a_library_table(tmp_path):
     root = tmp_path / "empty.kicad_sch"
     root.write_text("(kicad_sch)")
-    result = runner.invoke(app, ["--json", "verify", str(root)])
+    result = runner.invoke(app, ["verify", str(root)])
     assert result.exit_code == 0
-    assert json.loads(result.stdout)["ok"] is True
+    assert "source-complete" in result.stdout
 
 
 def test_verify_rejects_a_malformed_symbol_id(tmp_path):
     root = tmp_path / "broken.kicad_sch"
     root.write_text('(kicad_sch (symbol (lib_id "not-qualified")))')
-    result = runner.invoke(app, ["--json", "verify", str(root)])
+    result = runner.invoke(app, ["verify", str(root)])
     assert result.exit_code == 1
-    assert json.loads(result.stdout)["diagnostics"][0]["code"] == "invalid-symbol-id"
+    assert "invalid symbol ID" in result.stdout
 
 
 def test_verify_rejects_a_project_table_symlinked_outside(tmp_path):
@@ -125,19 +122,19 @@ def test_verify_rejects_machine_specific_variables_even_when_they_resolve(tmp_pa
     assert "non-portable URI" in result.stdout
 
 
-def test_audit_reports_unassigned_and_can_emit_json(tmp_path):
+def test_audit_reports_unassigned_footprints(tmp_path):
     root = _project(tmp_path / "project")
-    result = runner.invoke(app, ["--json", "audit", str(root)])
+    result = runner.invoke(app, ["audit", str(root), "--precise"])
     assert result.exit_code == 1
-    payload = json.loads(result.stdout)
-    assert payload["findings"][0]["code"] == "unassigned-footprint"
+    assert "unassigned footprint" in result.stdout
+    assert "has no footprint" in result.stdout
 
 
 def test_audit_rejects_path_like_footprint_ids_before_filesystem_lookup(tmp_path):
     root = _project(tmp_path / "project", footprint="Parts:../../private")
-    result = runner.invoke(app, ["--json", "audit", str(root)])
+    result = runner.invoke(app, ["audit", str(root), "--precise"])
     assert result.exit_code == 1
-    assert json.loads(result.stdout)["findings"][0]["code"] == "bad-footprint-id"
+    assert "malformed footprint ID" in result.stdout
 
 
 def test_list_reads_nested_vault_libraries(tmp_path):
@@ -146,10 +143,10 @@ def test_list_reads_nested_vault_libraries(tmp_path):
     (vault / "environmental.kicad_sym").write_text(
         '(kicad_symbol_lib (version 20251024) (symbol "SHT41"))'
     )
-    result = runner.invoke(app, ["--json", "list", str(tmp_path / "vault")])
+    result = runner.invoke(app, ["list", str(tmp_path / "vault")])
     assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["libraries"][0]["group"] == ["sensors"]
+    assert "sensors / environmental" in result.stdout
+    assert "SHT41" in result.stdout
 
 
 def test_list_treats_an_empty_project_catalog_as_a_valid_result(monkeypatch):
@@ -192,7 +189,7 @@ def test_pluck_and_sprout_execute_complete_transfer_plans(tmp_path, monkeypatch)
     assert (folder_vault / "parts/board.kicad_sym").is_file()
 
 
-def test_fit_uses_named_policy_then_graft_rewrites_only_references(tmp_path, monkeypatch):
+def test_fit_uses_a_named_passive_footprint_policy(tmp_path, monkeypatch):
     root = _project(tmp_path / "project", library="Device", symbol="R", value="10k")
     monkeypatch.setattr(
         "kicad_terrarium.commands.common.load_config",
@@ -201,10 +198,6 @@ def test_fit_uses_named_policy_then_graft_rewrites_only_references(tmp_path, mon
     fit = runner.invoke(app, ["fit", str(root), "--profile", "hand-solder"])
     assert fit.exit_code == 0
     assert "Resistor_SMD:R_0603_1608Metric" in root.read_text()
-
-    graft = runner.invoke(app, ["graft", str(root), "--old", "Device", "--new", "Parts"])
-    assert graft.exit_code == 0
-    assert '(lib_id "Parts:R")' in root.read_text()
 
 
 def test_fit_leaves_polarized_capacitors_for_explicit_selection(tmp_path, monkeypatch):
@@ -218,64 +211,21 @@ def test_fit_leaves_polarized_capacitors_for_explicit_selection(tmp_path, monkey
         "kicad_terrarium.commands.common.load_config",
         lambda: Config(),
     )
-    result = runner.invoke(app, ["--json", "fit", str(root)])
+    result = runner.invoke(app, ["fit", str(root)])
     assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["assigned"] == []
-    assert payload["polarized_capacitors_left_unassigned"] == ["U1"]
+    assert "0 empty footprints assigned" in result.stdout
+    assert "U1" in result.stdout
+    assert "polarized capacitor" in result.stdout
 
 
-def test_prune_and_seal_are_idempotent_project_operations(tmp_path):
+def test_seal_preserves_user_owned_local_libraries_and_is_idempotent(tmp_path):
     root = _project(tmp_path / "project", extra_symbol=True)
-    prune = runner.invoke(app, ["prune", str(root), "--precise"])
-    assert prune.exit_code == 0
-    assert "Unused" not in (root.parent / "library/Local.kicad_sym").read_text()
-
     first = runner.invoke(app, ["seal", str(root)])
     second = runner.invoke(app, ["seal", str(root)])
     assert first.exit_code == second.exit_code == 0
     assert verify_project(root).ok
+    assert "Unused" in (root.parent / "library/Local.kicad_sym").read_text()
     assert "unchanged" in second.stdout
-
-
-def test_snapshot_seals_a_new_handoff_without_touching_source(tmp_path):
-    root = _project(tmp_path / "source")
-    source_before = root.read_bytes()
-    destination = tmp_path / "handoff"
-    result = runner.invoke(app, ["seal", str(root), "--snapshot", str(destination)])
-    assert result.exit_code == 0
-    assert root.read_bytes() == source_before
-    assert verify_project(destination / root.name).ok
-
-
-def test_snapshot_preserves_links_instead_of_copying_external_targets(tmp_path):
-    root = _project(tmp_path / "source")
-    external = tmp_path / "private-model.step"
-    external.write_text("outside project")
-    link = root.parent / "linked-model.step"
-    link.symlink_to(external)
-    destination = tmp_path / "handoff"
-
-    result = runner.invoke(app, ["seal", str(root), "--snapshot", str(destination)])
-
-    assert result.exit_code == 0
-    copied_link = destination / link.name
-    assert copied_link.is_symlink()
-    assert copied_link.readlink() == external
-
-
-def test_snapshot_dry_run_preflights_an_existing_destination(tmp_path):
-    root = _project(tmp_path / "source")
-    destination = tmp_path / "handoff"
-    destination.mkdir()
-
-    result = runner.invoke(
-        app,
-        ["seal", str(root), "--snapshot", str(destination), "--dry-run"],
-    )
-
-    assert result.exit_code == 2
-    assert "already exists" in result.stderr
 
 
 def test_noninteractive_init_can_create_a_folder_vault(tmp_path, monkeypatch):
@@ -296,7 +246,7 @@ def test_noninteractive_init_can_create_a_folder_vault(tmp_path, monkeypatch):
     assert json.loads(config_path.read_text())["vault"] == str(vault)
 
 
-def test_init_dry_run_json_describes_folder_without_creating_it(tmp_path, monkeypatch):
+def test_init_dry_run_describes_folder_without_creating_it(tmp_path, monkeypatch):
     config_path = tmp_path / "config/config.json"
     monkeypatch.setattr("kicad_terrarium.commands.setup.CONFIG_PATH", config_path)
     monkeypatch.setattr(
@@ -306,11 +256,30 @@ def test_init_dry_run_json_describes_folder_without_creating_it(tmp_path, monkey
     vault = tmp_path / "vault"
     result = runner.invoke(
         app,
-        ["--json", "init", "--vault", str(vault), "--dry-run"],
+        ["init", "--vault", str(vault), "--dry-run"],
     )
     assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["dry_run"] is True
-    assert payload["create_vault_folder"] is True
+    assert "create vault folder" in result.stdout
+    assert "write Terrarium configuration" in result.stdout
     assert not vault.exists()
     assert not config_path.exists()
+
+
+def test_help_exposes_only_the_focused_command_surface():
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0
+    for command in (
+        "audit",
+        "browse",
+        "fit",
+        "init",
+        "list",
+        "pluck",
+        "scan",
+        "seal",
+        "sprout",
+        "verify",
+    ):
+        assert command in result.stdout
+    assert "prune" not in result.stdout
+    assert "graft" not in result.stdout

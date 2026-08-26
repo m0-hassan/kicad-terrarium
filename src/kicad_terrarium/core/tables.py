@@ -79,7 +79,6 @@ def parse_library_entries(
     table_text: str,
     *,
     scope: TableScope = "project",
-    table_path: Path | None = None,
 ) -> list[LibraryEntry]:
     """Parse immediate ``lib`` entries, preserving their table order."""
     all_forms = forms(table_text)
@@ -102,16 +101,15 @@ def parse_library_entries(
         children = child_forms(all_forms, entry)
         disabled = any(form.head == "disabled" for form in children)
         hidden = any(form.head == "hidden" for form in children)
+        _optional_field_value(table_text, all_forms, entry, "options")
         result.append(
             LibraryEntry(
                 nickname=fields["name"],
                 library_type=fields["type"],
                 uri=fields["uri"],
                 scope=scope,
-                table_path=table_path,
                 enabled=not disabled,
                 hidden=hidden,
-                options=_optional_field_value(table_text, all_forms, entry, "options"),
                 description=_optional_field_value(table_text, all_forms, entry, "descr"),
             )
         )
@@ -133,51 +131,6 @@ def table_entry_uri(
         f'(uri {quote(uri)})(options "")'
         f"(descr {quote(description)}){hidden_field})\n"
     )
-
-
-def table_entry(name: str, *, directory: str = "library") -> str:
-    """One canonical project-local symbol-library registration line."""
-    return table_entry_uri(name, f"${{KIPRJMOD}}/{directory}/{name}.kicad_sym")
-
-
-def registered_libraries(table_text: str) -> set[str]:
-    """Library nicknames declared in a valid project table."""
-    all_forms = forms(table_text)
-    roots = [
-        form
-        for form in all_forms
-        if form.depth == 0 and form.head in {"sym_lib_table", "fp_lib_table"}
-    ]
-    if len(roots) != 1:
-        raise ValueError("invalid KiCad library table")
-    return {
-        name
-        for entry in child_forms(all_forms, roots[0], "lib")
-        if (name := _field_value(table_text, all_forms, entry, "name")) is not None
-    }
-
-
-def merge_sym_lib_table(existing: str | None, names: list[str]) -> str:
-    """Add missing registrations without reserializing existing entries."""
-    text = existing if existing is not None else EMPTY_TABLE
-    current = registered_libraries(text)
-    additions: list[str] = []
-    for name in names:
-        if name not in current:
-            additions.append(table_entry(name))
-            current.add(name)
-    if not additions:
-        return text
-    all_forms = forms(text)
-    roots = [form for form in all_forms if form.depth == 0 and form.head == "sym_lib_table"]
-    if len(roots) != 1:
-        raise ValueError("invalid sym-lib-table")
-    root = roots[0]
-    newline = "\r\n" if "\r\n" in text else "\n"
-    insertion = "".join(additions).replace("\n", newline)
-    if root.start + 1 < root.end and not text[: root.end - 1].endswith(("\n", "\r")):
-        insertion = newline + insertion
-    return text[: root.end - 1] + insertion + text[root.end - 1 :]
 
 
 def remove_from_sym_lib_table(text: str, names: list[str]) -> str:
@@ -202,13 +155,6 @@ def remove_from_sym_lib_table(text: str, names: list[str]) -> str:
                 end = entry.end
             replacements.append((start, end, ""))
     return apply_replacements(text, replacements)
-
-
-def upsert_sym_lib_table(existing: str | None, names: list[str]) -> str:
-    """Make named registrations point at Terrarium's canonical local files."""
-    text = existing if existing is not None else EMPTY_TABLE
-    without_old = remove_from_sym_lib_table(text, names)
-    return merge_sym_lib_table(without_old, names)
 
 
 def upsert_sym_lib_uris(

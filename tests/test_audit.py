@@ -1,10 +1,11 @@
 from kicad_terrarium.core.audit import (
     cache_symbol_pins,
-    foreign_model_paths,
+    is_stock_model_path,
     missing_pads,
+    model_paths,
     pad_names,
 )
-from kicad_terrarium.core.discover import symbol_instances
+from kicad_terrarium.core.discover import placed_symbols
 
 SHEET = """(kicad_sch
 \t(lib_symbols
@@ -23,8 +24,11 @@ SHEET = """(kicad_sch
 """
 
 
-def test_symbol_instances_skips_cache_and_reads_properties():
-    assert symbol_instances(SHEET) == [("U1", "Comparator:TLV1872", "Package_SO:SOIC-8")]
+def test_placed_symbols_skips_cache_and_reads_properties():
+    [symbol] = placed_symbols(SHEET)
+    assert symbol.reference == "U1"
+    assert str(symbol.symbol_id) == "Comparator:TLV1872"
+    assert symbol.footprint == "Package_SO:SOIC-8"
 
 
 def test_cache_symbol_pins_collects_numbers_across_units():
@@ -48,14 +52,20 @@ def test_missing_pads_allows_extra_pads():
     assert missing_pads({"1", "2"}, {"1", "2", "EP"}) == set()
 
 
-def test_foreign_model_paths_flags_only_untravelable_refs():
+def test_model_paths_distinguishes_project_stock_and_untravelable_refs():
     mod = (
         '(model "${KIPRJMOD}/library/3dmodels/a.step")'
         '(model "${KICAD10_3DMODEL_DIR}/b.wrl")'
         '(model "${KICAD_PERSONAL_MODELS}/custom.step")'
         '(model "/Users/someone/Downloads/c.step")'
     )
-    assert foreign_model_paths(mod) == [
+    paths = model_paths(mod)
+    assert paths[:2] == [
+        "${KIPRJMOD}/library/3dmodels/a.step",
+        "${KICAD10_3DMODEL_DIR}/b.wrl",
+    ]
+    assert is_stock_model_path(paths[1])
+    assert paths[2:] == [
         "${KICAD_PERSONAL_MODELS}/custom.step",
         "/Users/someone/Downloads/c.step",
     ]

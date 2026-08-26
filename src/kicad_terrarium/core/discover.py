@@ -124,16 +124,10 @@ def placed_symbols(text: str) -> list[PlacedSymbol]:
                 value=properties.get("Value", ""),
                 footprint=properties.get("Footprint", ""),
                 on_board=_bool_field(text, children, "on_board", True),
-                in_bom=_bool_field(text, children, "in_bom", True),
                 dnp=_bool_field(text, children, "dnp", False),
             )
         )
     return result
-
-
-def symbol_instances(text: str) -> list[tuple[str, str, str]]:
-    """Compatibility view: ``(reference, lib_id, footprint)`` for placements."""
-    return [(item.reference, str(item.symbol_id), item.footprint) for item in placed_symbols(text)]
 
 
 Decider = Callable[[str, str, str, str], str | None]

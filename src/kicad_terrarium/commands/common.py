@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import json
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NoReturn, cast
+from typing import NoReturn
 
 import typer
 from rich.console import Console
@@ -18,7 +17,6 @@ from kicad_terrarium.presentation import ERROR, PLAN, ColorMode, make_console, s
 @dataclass
 class Runtime:
     color: ColorMode = "auto"
-    json_output: bool = False
     console: Console | None = None
     error_console: Console | None = None
 
@@ -26,9 +24,8 @@ class Runtime:
 runtime = Runtime()
 
 
-def configure(*, color: ColorMode, json_output: bool) -> None:
+def configure(*, color: ColorMode) -> None:
     runtime.color = color
-    runtime.json_output = json_output
     runtime.console = make_console(color)
     runtime.error_console = make_console(color, stderr=True)
 
@@ -43,25 +40,8 @@ def console(*, stderr: bool = False) -> Console:
     return runtime.console
 
 
-def _json_default(value: object) -> object:
-    if isinstance(value, Path):
-        return str(value)
-    if is_dataclass(value) and not isinstance(value, type):
-        return asdict(cast(Any, value))
-    if isinstance(value, set):
-        return sorted(value)
-    raise TypeError(f"cannot serialize {type(value).__name__}")
-
-
-def emit_json(payload: dict[str, Any]) -> None:
-    typer.echo(json.dumps(payload, default=_json_default, sort_keys=True))
-
-
 def fail(message: str, *, code: int = 1) -> NoReturn:
-    if runtime.json_output:
-        emit_json({"ok": False, "error": message, "exit_code": code})
-    else:
-        console(stderr=True).print(status_line(ERROR, message))
+    console(stderr=True).print(status_line(ERROR, message))
     raise typer.Exit(code=code)
 
 
@@ -110,11 +90,8 @@ def short_path(path: Path) -> str:
 
 def apply_plan(plan: OperationPlan, *, dry_run: bool) -> list[Path]:
     if dry_run:
-        if not runtime.json_output:
-            for change in plan.changes:
-                console().print(
-                    status_line(PLAN, f"{change.description}  {short_path(change.path)}")
-                )
+        for change in plan.changes:
+            console().print(status_line(PLAN, f"{change.description}  {short_path(change.path)}"))
         return []
     try:
         return plan.apply()

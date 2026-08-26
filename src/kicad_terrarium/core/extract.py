@@ -126,13 +126,6 @@ def assemble_library(names: list[str], blocks: dict[str, str], source_text: str)
     )
 
 
-def vendor_library(source_text: str, wanted: set[str]) -> tuple[str, list[str], set[str]]:
-    """One library, vendored: (output file text, names kept, names missing)."""
-    blocks = symbol_blocks(source_text)
-    ordered, missing = extends_closure(wanted, blocks)
-    return assemble_library(ordered, blocks, source_text), ordered, missing
-
-
 def pluck_symbols(source_text: str, wanted: set[str]) -> tuple[dict[str, str], set[str]]:
     """Symbol blocks to copy for `wanted`, parents included: ({name: block}, missing)."""
     blocks = symbol_blocks(source_text)
@@ -173,22 +166,3 @@ def merge_symbols(
     prefix = dest_text[:close]
     separator = "" if prefix.endswith(("\n", "\r")) else newline
     return prefix + separator + body + newline + dest_text[close:], added
-
-
-def prune_library(lib_text: str, used: set[str]) -> tuple[str, list[str], list[str]]:
-    """Rewrite a library keeping only `used` symbols and their extends parents.
-
-    A parent kept only because a used symbol inherits from it stays even when
-    it isn't referenced directly. Returns (new text, kept names parents-first,
-    removed names).
-    """
-    blocks = symbol_blocks(lib_text)
-    keep_ordered, missing = extends_closure(used, blocks)
-    if missing:
-        raise ValueError(
-            "cannot prune a library with missing used definitions or parents: "
-            + ", ".join(sorted(missing))
-        )
-    keep = set(keep_ordered)
-    removed = [name for name in blocks if name not in keep]
-    return assemble_library(keep_ordered, blocks, lib_text), keep_ordered, removed

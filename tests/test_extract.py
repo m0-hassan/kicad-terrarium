@@ -7,9 +7,7 @@ from kicad_terrarium.core.extract import (
     library_version,
     merge_symbols,
     pluck_symbols,
-    prune_library,
     symbol_blocks,
-    vendor_library,
 )
 
 LIB = """(kicad_symbol_lib
@@ -97,12 +95,6 @@ def test_assemble_library_preserves_crlf_without_doubling_carriage_returns():
     assert out.count("\r\n") == out.count("\n")
 
 
-def test_vendor_library_end_to_end():
-    out, kept, missing = vendor_library(LIB, {"R_US"})
-    assert kept == ["R", "R_US"] and missing == set()
-    assert '(symbol "C"' not in out and "(hide yes)" in out
-
-
 def test_pluck_symbols_includes_parents():
     additions, missing = pluck_symbols(LIB, {"R_US"})
     assert set(additions) == {"R", "R_US"} and missing == set()
@@ -127,33 +119,3 @@ def test_merge_symbols_skips_duplicates():
     base, _ = merge_symbols(None, pluck_symbols(LIB, {"C"})[0], "20251024")
     merged, added = merge_symbols(base, pluck_symbols(LIB, {"C"})[0])
     assert added == [] and merged == base
-
-
-def test_prune_library_keeps_used_and_parents_removes_the_rest():
-    out, kept, removed = prune_library(LIB, {"R_US"})
-    assert kept == ["R", "R_US"]  # parent kept even though not used directly
-    assert removed == ["C"]
-    assert '(symbol "C"' not in out and "(hide yes)" in out  # kept blocks byte-exact
-
-
-def test_prune_library_nothing_used_removes_everything():
-    out, kept, removed = prune_library(LIB, set())
-    assert kept == []
-    assert set(removed) == {"R", "R_US", "C"}
-    assert '(symbol "' not in out  # empty library
-
-
-def test_prune_library_all_used_is_a_noop():
-    _, kept, removed = prune_library(LIB, {"R", "R_US", "C"})
-    assert removed == [] and set(kept) == {"R", "R_US", "C"}
-
-
-def test_prune_refuses_to_preserve_a_symbol_without_its_parent():
-    broken = '(kicad_symbol_lib (version 20251024) (symbol "Child" (extends "Gone")))'
-    with pytest.raises(ValueError, match="missing used definitions or parents"):
-        prune_library(broken, {"Child"})
-
-
-def test_prune_refuses_to_delete_a_library_missing_its_used_symbol():
-    with pytest.raises(ValueError, match="Missing"):
-        prune_library(LIB, {"Missing"})

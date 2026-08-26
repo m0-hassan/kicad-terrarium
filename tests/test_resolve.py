@@ -2,19 +2,9 @@ from pathlib import Path
 
 from kicad_terrarium.core.resolve import (
     expand_uri,
-    parse_lib_table,
     resolve_global_library_details,
-    resolve_libraries,
     resolve_library_details,
 )
-
-KICAD9_STYLE = '(lib (name "a")(type "KiCad")(uri "/tmp/a.kicad_sym")(options "")(descr ""))'
-KICAD10_STYLE = '(lib (name "a") (type "KiCad") (uri "/tmp/a.kicad_sym") (options "") (descr ""))'
-
-
-def test_parse_lib_table_handles_both_spacing_styles():
-    assert parse_lib_table(KICAD9_STYLE) == [("a", "KiCad", "/tmp/a.kicad_sym")]
-    assert parse_lib_table(KICAD10_STYLE) == [("a", "KiCad", "/tmp/a.kicad_sym")]
 
 
 def test_expand_uri_substitutes_kiprjmod_and_versioned_symbol_dir():
@@ -57,8 +47,10 @@ def test_resolve_project_shadows_global_and_drops_missing(tmp_path):
     (proj / "sym-lib-table").write_text(
         '(sym_lib_table (lib (name "dev")(type "KiCad")(uri "${KIPRJMOD}/library/dev.kicad_sym")))'
     )
-    libs = resolve_libraries(proj, share_dir=share, config_dir=config)
-    assert libs == {"dev": proj / "library/dev.kicad_sym"}
+    details = resolve_library_details(proj, share_dir=share, config_dir=config)
+    assert {name: item.path for name, item in details.libraries.items()} == {
+        "dev": proj / "library/dev.kicad_sym"
+    }
 
 
 def test_resolve_follows_nested_table_indirection(tmp_path):
@@ -76,8 +68,10 @@ def test_resolve_follows_nested_table_indirection(tmp_path):
     (config / "10.0/sym-lib-table").write_text(
         f'(sym_lib_table (lib (name "KiCad") (type "Table") (uri "{stock}")))'
     )
-    libs = resolve_libraries(tmp_path / "proj", share_dir=share, config_dir=config)
-    assert libs == {"Device": share / "symbols/Device.kicad_sym"}
+    details = resolve_library_details(tmp_path / "proj", share_dir=share, config_dir=config)
+    assert {name: item.path for name, item in details.libraries.items()} == {
+        "Device": share / "symbols/Device.kicad_sym"
+    }
 
 
 def test_resolve_reads_custom_kicad_path_variables(tmp_path):
@@ -94,7 +88,8 @@ def test_resolve_reads_custom_kicad_path_variables(tmp_path):
     (version / "sym-lib-table").write_text(
         '(sym_lib_table (lib (name "Mine")(type "KiCad")(uri "${MY_LIBS}/Mine.kicad_sym")))'
     )
-    assert resolve_libraries(tmp_path / "project", config_dir=config) == {"Mine": source}
+    details = resolve_library_details(tmp_path / "project", config_dir=config)
+    assert {name: item.path for name, item in details.libraries.items()} == {"Mine": source}
 
 
 def test_dangling_project_registration_does_not_fall_back_to_global(tmp_path):

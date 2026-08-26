@@ -28,18 +28,6 @@ class LibrarySource:
         """Unambiguous slash-delimited name accepted by --from-library."""
         return "/".join((*self.group, self.nickname))
 
-    @property
-    def source_path(self) -> Path:
-        """A path that rediscovers this same logical library."""
-        if not self.files:
-            raise ValueError(f"library {self.label!r} contains no symbol files")
-        if not self.unpacked:
-            return self.files[0]
-        for parent in self.files[0].parents:
-            if parent.suffix == ".kicad_symdir":
-                return parent
-        return self.files[0].parent
-
 
 @dataclass(frozen=True)
 class SymbolSource:

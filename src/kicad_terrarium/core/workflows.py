@@ -16,13 +16,12 @@ from kicad_terrarium.core.extract import (
     extends_closure,
     merge_symbols,
     pluck_symbols,
-    prune_library,
 )
 from kicad_terrarium.core.io import OperationPlan, read_utf8
 from kicad_terrarium.core.library import LibrarySource, SymbolSource, source_blocks, source_version
 from kicad_terrarium.core.models import LibraryEntry, SymbolId
 from kicad_terrarium.core.project import project_lib_ids, project_schematics
-from kicad_terrarium.core.repoint import repoint_libraries, repoint_text
+from kicad_terrarium.core.repoint import repoint_libraries
 from kicad_terrarium.core.resolve import (
     expand_uri,
     resolve_global_library_details,
@@ -84,10 +83,7 @@ def _is_terrarium_managed(entry: LibraryEntry | None) -> bool:
 
 @dataclass
 class TransferResult:
-    symbol: str
-    library: str
     destination: Path
-    added: list[str]
     parents: list[str]
     plan: OperationPlan
 
@@ -97,7 +93,6 @@ class SealLibraryResult:
     nickname: str
     used: int
     kept: int
-    destination: Path
     changed: bool
     sources: tuple[str, ...] = ()
 
@@ -106,7 +101,6 @@ class SealLibraryResult:
 class SealResult:
     plan: OperationPlan
     libraries: list[SealLibraryResult] = field(default_factory=list)
-    rewritten: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -121,24 +115,11 @@ class _SealGroup:
 
 
 @dataclass
-class RewriteResult:
-    plan: OperationPlan
-    changed: list[tuple[Path, int]]
-
-
-@dataclass
 class FitResult:
     plan: OperationPlan
     applied: list[tuple[str, str]]
     skipped_inductors: set[str]
     skipped_polarized_capacitors: set[str]
-
-
-@dataclass
-class PruneResult:
-    plan: OperationPlan
-    removed: dict[str, list[str]]
-    dropped: list[str]
 
 
 def _validate_root(root: Path) -> Path:
@@ -163,7 +144,7 @@ def _registration(project_dir: Path, nickname: str) -> tuple[LibraryEntry, Path]
         return None
     entries = [
         entry
-        for entry in parse_library_entries(read_utf8(table), table_path=table)
+        for entry in parse_library_entries(read_utf8(table))
         if entry.enabled and entry.nickname == nickname
     ]
     if len(entries) > 1:
@@ -189,31 +170,23 @@ def _project_uri(project_dir: Path, path: Path) -> str:
 def plan_pluck(
     source: SymbolSource,
     root: Path,
-    *,
-    as_library: str | None = None,
 ) -> TransferResult:
     """Plan an unambiguous symbol transfer into a self-contained project."""
     root = _validate_root(root)
     project_dir = root.parent
-    if as_library is None:
-        nickname = terrarium_library_nickname(
-            source.library.nickname,
-            source.library.group,
-        )
-        destination = project_dir / TERRARIUM_LIBRARY_DIRECTORY
-        destination = destination.joinpath(
-            *source.library.group,
-            f"{source.library.nickname}.kicad_sym",
-        )
-    else:
-        nickname = validate_library_nickname(as_library)
-        destination = project_dir / "library" / f"{nickname}.kicad_sym"
+    nickname = terrarium_library_nickname(
+        source.library.nickname,
+        source.library.group,
+    )
+    destination = project_dir / TERRARIUM_LIBRARY_DIRECTORY
+    destination = destination.joinpath(
+        *source.library.group,
+        f"{source.library.nickname}.kicad_sym",
+    )
     registration = _registration(project_dir, nickname)
     registered_path = registration[1] if registration is not None else None
-    if (
-        as_library is None
-        and registration is not None
-        and (not _is_terrarium_managed(registration[0]) or registered_path != destination.resolve())
+    if registration is not None and (
+        not _is_terrarium_managed(registration[0]) or registered_path != destination.resolve()
     ):
         raise WorkflowError(
             f"reserved destination nickname {nickname!r} is not a Terrarium workbench library"
@@ -229,9 +202,7 @@ def plan_pluck(
     if registration is None:
         collision = resolve_library_details(project_dir).libraries.get(nickname)
         if collision is not None and collision.path.resolve() != destination.resolve():
-            raise WorkflowError(
-                f"reserved destination nickname {nickname!r} already exists; choose --as explicitly"
-            )
+            raise WorkflowError(f"reserved destination nickname {nickname!r} already exists")
 
     blocks = source_blocks(source.library)
     additions, missing = pluck_symbols(
@@ -241,7 +212,7 @@ def plan_pluck(
     if missing:
         raise WorkflowError(f"source is missing symbol definitions or parents: {sorted(missing)}")
     existing = read_utf8(destination) if destination.is_file() else None
-    output, added = merge_symbols(existing, additions, source_version(source.library))
+    output, _ = merge_symbols(existing, additions, source_version(source.library))
 
     table = project_dir / "sym-lib-table"
     table_text = read_utf8(table) if table.is_file() else None
@@ -254,10 +225,7 @@ def plan_pluck(
     plan.write(destination, output, f"add {source.symbol} to {nickname}")
     plan.write(table, new_table, f"register {nickname}")
     return TransferResult(
-        source.symbol,
-        nickname,
         destination,
-        added,
         sorted(set(additions) - {source.symbol}),
         plan,
     )
@@ -296,15 +264,12 @@ def plan_sprout(
     if missing:
         raise WorkflowError(f"source is missing symbol definitions or parents: {sorted(missing)}")
     existing = read_utf8(destination) if destination.is_file() else None
-    output, added = merge_symbols(existing, additions, source_version(source.library))
+    output, _ = merge_symbols(existing, additions, source_version(source.library))
     boundary = vault if vault.is_dir() else vault.parent
     plan = OperationPlan(boundary)
     plan.write(destination, output, f"sprout {source.symbol} into {nickname}")
     return TransferResult(
-        source.symbol,
-        nickname,
         destination,
-        added,
         sorted(set(additions) - {source.symbol}),
         plan,
     )
@@ -403,7 +368,6 @@ def plan_seal(root: Path) -> SealResult:
                     source_nickname,
                     len(wanted),
                     len(blocks),
-                    current_path,
                     needs_direct_registration,
                     (source_nickname,),
                 )
@@ -541,7 +505,6 @@ def plan_seal(root: Path) -> SealResult:
                 group.nickname,
                 len(group.wanted),
                 len(ordered),
-                group.destination,
                 before != output.encode("utf-8")
                 or any(rewritten.get(source) == group.nickname for source in group.sources),
                 tuple(sorted(group.sources)),
@@ -569,21 +532,7 @@ def plan_seal(root: Path) -> SealResult:
     for legacy_path in sorted(delete_legacy_paths):
         plan.delete(legacy_path, "retire migrated Terrarium shadow")
 
-    return SealResult(plan, results, rewritten)
-
-
-def plan_graft(root: Path, old_library: str, new_library: str) -> RewriteResult:
-    root = _validate_root(root)
-    validate_library_nickname(old_library)
-    validate_library_nickname(new_library)
-    plan = _project_plan(root)
-    changed: list[tuple[Path, int]] = []
-    for sheet in project_schematics(root, allow_external=False):
-        output, count = repoint_text(read_utf8(sheet), old_library, new_library)
-        if count:
-            plan.write(sheet, output, f"graft {old_library} to {new_library}")
-            changed.append((sheet, count))
-    return RewriteResult(plan, changed)
+    return SealResult(plan, results)
 
 
 def plan_fit(root: Path, rules: Rules) -> FitResult:
@@ -634,48 +583,6 @@ def plan_fit(root: Path, rules: Rules) -> FitResult:
             and item.symbol_id.name in POLARIZED_CAPACITOR_SYMBOLS
         )
     return FitResult(plan, applied, inductors, polarized_capacitors)
-
-
-def plan_prune(root: Path) -> PruneResult:
-    """Prune by registered nickname, never by filename stem or alias."""
-    root = _validate_root(root)
-    project_dir = root.parent
-    all_ids = project_lib_ids(root, allow_external=False)
-    _validate_project_ids(all_ids)
-    table = project_dir / "sym-lib-table"
-    table_text = read_utf8(table) if table.is_file() else None
-    entries = parse_library_entries(table_text, table_path=table) if table_text else []
-    plan = _project_plan(root)
-    removed_by_library: dict[str, list[str]] = {}
-    dropped: list[str] = []
-    for entry in entries:
-        if not entry.enabled or entry.library_type.casefold() != "kicad":
-            continue
-        path = expand_uri(entry.uri, project_dir, base_dir=table.parent).resolve()
-        if (
-            not path.is_relative_to(project_dir)
-            or not path.is_file()
-            or path.suffix != ".kicad_sym"
-        ):
-            continue
-        output, kept, removed = prune_library(
-            read_utf8(path), used_symbols(all_ids, entry.nickname)
-        )
-        if not removed:
-            continue
-        removed_by_library[entry.nickname] = removed
-        if kept:
-            plan.write(path, output, f"prune {entry.nickname}")
-        else:
-            plan.delete(path, f"drop unused library {entry.nickname}")
-            dropped.append(entry.nickname)
-    if dropped and table_text is not None:
-        plan.write(
-            table,
-            remove_from_sym_lib_table(table_text, dropped),
-            "remove unused library registrations",
-        )
-    return PruneResult(plan, removed_by_library, dropped)
 
 
 def footprint_summary(applied: list[tuple[str, str]]) -> Counter[str]:

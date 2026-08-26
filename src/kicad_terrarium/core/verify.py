@@ -13,21 +13,8 @@ from kicad_terrarium.core.resolve import expand_uri
 from kicad_terrarium.core.tables import (
     parse_library_entries,
     portable_project_uri,
-    registered_libraries,
     validate_library_nickname,
 )
-
-__all__ = [
-    "VerificationReport",
-    "external_libraries",
-    "registered_libraries",
-    "verify_project",
-]
-
-
-def external_libraries(used: set[str], registered: set[str]) -> set[str]:
-    """Library nicknames used by the design but absent from its local table."""
-    return used - registered
 
 
 @dataclass
@@ -118,9 +105,7 @@ def verify_project(root: Path) -> VerificationReport:
         )
         return report
     try:
-        entries = parse_library_entries(
-            table_path.read_bytes().decode("utf-8"), scope="project", table_path=table_path
-        )
+        entries = parse_library_entries(table_path.read_bytes().decode("utf-8"), scope="project")
     except (OSError, UnicodeError, ValueError) as error:
         report.diagnostics.append(
             Diagnostic("error", f"invalid sym-lib-table: {error}", table_path, "invalid-table")

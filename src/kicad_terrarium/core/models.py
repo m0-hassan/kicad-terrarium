@@ -36,10 +36,8 @@ class LibraryEntry:
     library_type: str
     uri: str
     scope: TableScope = "project"
-    table_path: Path | None = None
     enabled: bool = True
     hidden: bool = False
-    options: str = ""
     description: str = ""
 
 
@@ -51,7 +49,7 @@ class ResolvedLibrary:
     path: Path
 
 
-DiagnosticLevel = Literal["error", "warning", "info"]
+DiagnosticLevel = Literal["error", "warning"]
 
 
 @dataclass(frozen=True)
@@ -81,5 +79,4 @@ class PlacedSymbol:
     value: str = ""
     footprint: str = ""
     on_board: bool = True
-    in_bom: bool = True
     dnp: bool = False
