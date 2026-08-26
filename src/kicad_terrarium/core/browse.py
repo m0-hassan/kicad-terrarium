@@ -57,3 +57,25 @@ class Browser:
             self.stack.append(Screen(item.label, item.children))
             return None
         return item.action
+
+
+def search_items(items: list[Item], query: str) -> list[Item]:
+    """Flatten matching leaves while preserving their original actions."""
+    needle = query.casefold().strip()
+    if not needle:
+        return []
+    matches: list[Item] = []
+
+    def visit(rows: list[Item], trail: tuple[str, ...]) -> None:
+        for item in rows:
+            if item.children is not None:
+                visit(item.children, (*trail, item.label))
+            elif needle in item.label.casefold() or any(
+                needle in segment.casefold() for segment in trail
+            ):
+                context = " / ".join(trail)
+                label = f"{item.label}  [{context}]" if context else item.label
+                matches.append(Item(label, action=item.action))
+
+    visit(items, ())
+    return matches

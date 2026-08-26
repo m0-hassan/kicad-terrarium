@@ -1,4 +1,4 @@
-from kicad_terrarium.core.browse import Browser, Item, Screen
+from kicad_terrarium.core.browse import Browser, Item, Screen, search_items
 
 
 def make_browser() -> Browser:
@@ -39,3 +39,10 @@ def test_back_at_root_is_false():
 
 def test_enter_empty_screen_is_none():
     assert Browser(Screen("empty", [])).enter() is None
+
+
+def test_search_flattens_matching_leaves_and_keeps_actions():
+    root = make_browser().screen
+    matches = search_items(root.items, "coax")
+    assert len(matches) == 1
+    assert matches[0].action == ("pluck", "coax")
