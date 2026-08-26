@@ -1,156 +1,254 @@
 # Developing kicad-terrarium
 
-Everything a new contributor (or a fresh AI agent with no prior context) needs
-to pick this project up. For *what the tool does and why*, read `README.md`
-first; for the central design decision, read `docs/shadow-vs-consolidate.md`.
-This file is the *how it's built* companion — it doesn't repeat those.
+Read [README.md](README.md) first for the product. This document describes the
+implementation boundaries that should survive future work.
 
-One-line ethos: **mechanics belong to the tool, judgment belongs to the
-engineer.** The tool copies, registers, and checks; it never chooses parts.
-Corollary that shapes the whole codebase: **library data is copied byte-for-byte,
-never round-tripped through a structural parser** (see the kiutils landmine
-below).
+## Product contract
 
-## Current state (v1.0)
+Terrarium has two equally important jobs:
 
-Feature-complete and green: 74 tests, `ruff`/`mypy` clean. Eleven commands, all
-with `--dry-run` + `.bak` where they write, and cwd-defaulting (run bare from
-inside a project). `kt` is a short alias for `kicad-terrarium`.
+1. make custom-symbol reuse dramatically faster than KiCad's library GUI path;
+2. make professional handoffs source-complete and self-contained.
 
-| command | one line |
-|---|---|
-| `init` | interactive first-run config (vault + project roots) |
-| `scan` | count symbols per library; `--precise` lists exact names |
-| `seal` | copy used symbols into `./library`, register them (the headline op) |
-| `verify` | exit 1 unless every used library is registered locally |
-| `fit` | assign footprints to unassigned R/C by value; `--precise` per-part |
-| `prune` | trim project-local libraries to exactly the symbols used |
-| `audit` | read-only lint (pin/pad, unassigned, orphans, model paths) |
-| `list` | browse projects / a library's symbols |
-| `pluck` | copy one symbol (+ parents) down into a project, before placing it |
-| `sprout` | copy one symbol up into the vault, to reuse later |
-| `browse` | curses arrow-key menu over pluck/sprout (with a swaying plant 🌱) |
-| `graft` | advanced: rewrite a library name across references (rare) |
-
-Nothing is pushed to a remote yet. Config lives at
-`~/.config/kicad-terrarium/config.json`.
-
-## Working on it
-
-```bash
-pip install -e ".[dev]"    # dev extras: pytest, ruff, mypy
-ruff check src tests && ruff format src tests && mypy src && pytest
-```
-
-All four must pass before every commit (`.pre-commit-config.yaml` runs ruff
-automatically; `pre-commit install` once). Notes:
-
-- `ruff` replaces flake8 + black + isort. B008 is suppressed for
-  `typer.Argument`/`typer.Option` (they're *meant* to be called in defaults).
-- Gitignored: `.venv/`, `build/`, `demo/`, `*.egg-info/`, caches. `build/` was
-  once committed by accident — keep it out.
-- **`kicad-cli`** (inside the KiCad app) is the real authority on whether output
-  is valid: `kicad-cli sym export svg -o /tmp/x lib.kicad_sym` for a library,
-  `kicad-cli sch erc <root>` for schematics. Use it to accept changes, not just
-  pytest.
-- **Never run write commands on a live project** while KiCad has it open (lock
-  files: `~<name>.kicad_sch.lck`). Test writes on a *copy*.
+The governing principle is: **automate declared mechanics; expose engineering
+judgment.** Copying an exact symbol block is mechanics. Applying a named fit
+profile is declared policy. Choosing an inductor package or pretending package
+size proves electrical suitability is not.
 
 ## Architecture
 
-`core/` is pure (data in → data out); `cli.py` is a thin I/O shell with no
-logic. Where a file must be read (`project.py`), the reader is an injected
-`Callable[[Path], str]` defaulting to `Path.read_text`, so tests fake the
-filesystem with a dict — that's why the suite needs almost no fixtures.
-
-```
+```text
 src/kicad_terrarium/
-  cli.py            Typer app: all I/O, one command per operation
+  cli.py                  Typer assembly and global output options only
+  presentation.py         botanical palette, NO_COLOR, restrained statuses
+  commands/
+    common.py              output/config/project/error boundaries
+    inspect.py             scan, audit, verify
+    transfer.py            list, pluck, sprout, seal, prune, graft
+    setup.py               init and fit
+    browser.py             curses view/search; no transfer logic
   core/
-    discover.py     find_lib_ids, symbol_instances, reassign_footprints, counts
-    project.py      project_schematics, project_lib_ids (sub-sheet graph walk)
-    extract.py      byte-exact symbol copy: block scanner, extends closure, merge
-    resolve.py      sym/fp-lib-table resolution, KiCad path vars, table nesting
-    tables.py       sym-lib-table emission + merge
-    verify.py       registered vs. used libraries
-    audit.py        pad names, cache pin sets, pin/pad diff, foreign model paths
-    sizing.py       value parsers + value→package Rules
-    config.py       JSON config load/parse/dump
-    browse.py       pure menu state machine (Browser / Screen / Item)
-    repoint.py      reference-name rewrite
+    models.py              precise shared domain records
+    sexpr.py               string-aware source-span scanner
+    discover.py            placed symbols, sheets, exact footprint edits
+    project.py             bounded sub-sheet graph traversal
+    extract.py             verbatim definition copy/inheritance/merge/prune
+    library.py             packed, unpacked, and nested-vault discovery
+    tables.py              structural table parsing and span edits
+    resolve.py             cross-platform KiCad table/path resolution
+    verify.py              deep source-completeness proof
+    audit.py               footprint/pad/model primitives
+    sizing.py              validated named R/C assignment policy
+    io.py                  atomic plans, backups, locks, rollback
+    workflows.py           complete preflighted mutation plans
+    browse.py              pure navigation/search state
+    repoint.py             targeted library-reference edits
 ```
 
-**Command names ≠ module names, on purpose.** User-facing names suit the EE
-audience — `seal` (the vendoring op in `extract.py`), `fit` (`sizing.py`),
-`graft` (`repoint.py`). Internal functions keep the operation term
-(`vendor_library`, `repoint_text`) because they describe what the code does.
-Don't "reconcile" them.
+Dependency direction is one-way: `cli` → `commands` → `core`. Core modules do
+not print, prompt, or depend on Typer/Rich/curses. Commands translate exceptions
+and domain results into human or JSON output.
 
-## Hard-won constraints (do not relearn these the hard way)
+The command split is by workflow, not one tiny file per verb. Avoid rebuilding a
+single CLI wall, but also avoid fragmenting one operation across arbitrary
+wrappers.
 
-Each cost real debugging on real boards; they're the reason the code looks the
-way it does.
+## KiCad parsing strategy
 
-- **kiutils must never *write* a KiCad 10 file.** Round-tripping a v20251024
-  `.kicad_sym` silently drops every `(hide yes)` property flag (writes bare
-  `(show_name)`), so every symbol property becomes visible in the editor. This
-  is why sealing copies symbol blocks *verbatim*. The s-expression scanner in
-  `extract.py` tracks paren depth and skips quoted strings, so parentheses
-  inside a description can't desync it, and block boundaries never depend on
-  indentation (hand-edited libraries put `)` and the next `(symbol` on one line).
-  kiutils is fine for *reading*.
-- **`extends` closure is mandatory.** Stock symbols inherit (e.g. OPA2197xD
-  extends NCS2325D); a sealed library missing the parent parses but cannot be
-  drawn. `extract.extends_closure` pulls parents in, parents-first.
-- **Shadowing, not repointing.** A project-table entry outranks a same-named
-  global one, so sealing under original names needs zero reference rewrites.
-  This is the whole basis of the *shadow* strategy — full reasoning and the
-  shadow-vs-consolidate comparison is in `docs/shadow-vs-consolidate.md`.
-  `graft`/`repoint_text` exists only for deliberate renames.
-- **KiCad 10 lib-tables nest.** A global entry with `(type "Table")` points at
-  the stock table; `resolve.py` follows one level of that. Entry spacing differs
-  between KiCad 9 `(name "x")(type` and 10 `(name "x") (type` — the regex
-  tolerates both. Path vars: `${KIPRJMOD}`, `${KICADn_SYMBOL_DIR}`,
-  `${KICADn_FOOTPRINT_DIR}`.
-- **`sym-lib-table` has no file extension.** A heredoc writing it must quote the
-  delimiter or the shell expands `${KIPRJMOD}`.
-- **KiCad's own libraries ship footprint bugs** — TLV1872DGSR defaults to SOIC-8
-  for a 10-pin part; TMUX6119 to SC-70-6 for an 8-pin part. That's why `audit`'s
-  pin/pad-count check exists: "matches the stock default" is not proof of
-  correctness.
-- **`scan` counts instances; `seal` keeps unique definitions.** Multi-unit
-  symbols emit one instance block per placed unit — dedupe by reference when
-  reporting per-component.
-- Old (v5) footprint files use unquoted pad names; `audit.pad_names` reads both.
-- The curses loop in `cli._run_browser` is the only code not covered by pytest
-  (needs a real TTY). Keep it a thin view; its logic lives in the tested
-  `core.browse`. Verify UI changes by running `browse` in a terminal (or a
-  bounded pty).
+Do not round-trip project files or symbol libraries through a general object
+serializer. An earlier kiutils path dropped KiCad 10 `(hide yes)` and
+`(show_name no)` details. Terrarium instead uses a small string-aware
+S-expression scanner that records exact spans.
 
-## Roadmap
+Rules:
 
-In rough priority order:
+- reads must not depend on indentation or line endings;
+- edits replace only the token/form spans they own;
+- unknown and future forms remain byte-for-byte untouched;
+- quoted parentheses and escaped quotes must not affect depth;
+- packed symbol definitions are copied verbatim;
+- assembled wrapper text may be synthesized, but copied blocks may not;
+- malformed input is a hard, user-facing error — never “best effort” output.
 
-- **footprint sealing** — the other half of portability. `fp-lib-table` is the
-  same format `resolve.py` already handles; add copying `.pretty` + 3D models
-  and rewriting model paths to `${KIPRJMOD}` (`audit` already flags the
-  non-portable ones).
-- **`pluck --from a-schematic`** — read a symbol out of a `.kicad_sch`'s embedded
-  `lib_symbols` cache, for recovering a symbol whose library was lost (the cache
-  names symbols `Lib:Name`, so the prefix must be stripped to make a real
-  library symbol). Niche recovery, not the everyday path.
-- **orphan recovery** — search a path for a library that contains a missing
-  symbol.
-- polish: the `browse` menu supports arbitrary trees, so "Sizing rules" / "Config"
-  screens could be added; paging for very long symbol lists.
+`core.sexpr` is intentionally not a full AST or serializer. Keep it small.
 
-`pluck`/`sprout` are the two directions of the same op (project ⇄ vault
-library), sharing `_find_symbol_source` + `extract.pluck_symbols`/`merge_symbols`.
-`graft` (reference rename) is deliberately kept but niche — with shadow settled,
-its only real use is fixing/unifying a badly-named library.
+## Symbol-library invariants
 
-**Test corpus.** The real boards used for acceptance (not committed): `PID`,
-`REFLECTOMETER`, `AL-MAWJA`. Pattern: copy one, run the command, then `verify`
-must pass and every produced library must survive `kicad-cli sym export svg`.
-`~/terrarium-tutorial/` has a scripted, resettable REFLECTOMETER sandbox and a
-`TUTORIAL.md` walkthrough of every command.
+- A symbol ID is exactly `nickname:name`; colons and path separators are not
+  valid Terrarium-generated nicknames.
+- Every selected symbol includes the transitive closure of `(extends ...)`
+  parents, parents first.
+- A same-name, byte-different definition is a conflict, not a duplicate to skip.
+- Ordinary vault directories contain sub-libraries. A `.kicad_symdir` denotes
+  one unpacked logical library. KiCad itself permits any folder as an unpacked
+  source; table-resolved folders are therefore treated as one library.
+- Ambiguous symbol search must ask for `--from-library`; discovery order must
+  never select a winner silently.
+- `prune` maps files through table nicknames. Filename stems are not identity;
+  aliases are legal.
+
+## Sealing semantics
+
+`seal` is in-place project finalization, not a magical proof of every KiCad
+asset and not a mandatory pre-commit ritual.
+
+Default sealing uses namespaced project-local dependencies:
+
+- map an external `Connector` source to `Terrarium__Connector`;
+- write its used definition closure under
+  `library/terrarium/Connector.kicad_sym`;
+- rewrite only matching `lib_id` and cached-symbol identifiers;
+- register the namespaced source with a portable `${KIPRJMOD}` URI;
+- keep the original global nickname unshadowed and searchable;
+- hide sealed external dependencies from the chooser while keeping them loaded;
+- keep actively plucked workbench libraries visible;
+- preserve a valid user-owned source that is already inside the project;
+- migrate only old project libraries whose table description identifies them
+  as Terrarium-managed;
+- fail on a reserved-nickname collision or unregistered canonical destination;
+- fail the entire plan if any used definition or parent is unresolved.
+
+There is at most one managed output library per logical source. Never create
+one file per symbol. Multiple per-source files preserve collision domains and
+provenance without copying complete upstream catalogs.
+
+The library write, table edit, reference rewrites, and retirement of recognized
+legacy shadows belong to one `OperationPlan`. An in-place migration therefore
+creates recovery backups for every changed schematic, table, and retired source
+and rolls back the complete set on failure.
+
+`seal --snapshot` copies the project to a sibling staging directory, applies
+the same namespaced seal, deep-verifies the copy, and only then atomically names
+the destination. The working project is never changed.
+
+KiCad 6+ embeds resolved symbol copies in schematics. `verify` deliberately
+checks the stronger, narrower promise that editable source libraries also
+travel. It does not yet certify footprint/model containment.
+
+## Mutation protocol
+
+Every write command must build one `OperationPlan` before applying it.
+
+The plan owns:
+
+1. explicit filesystem boundaries;
+2. expected SHA-256 state for every destination;
+3. known KiCad project and symbol-library lock-file checks;
+4. same-directory temporary staging and `fsync`;
+5. unique adjacent recovery backups;
+6. atomic `os.replace` commits;
+7. reverse-order rollback after a partial failure.
+
+Dry-run output is rendered from the same plan that real execution applies. Do
+not add direct `Path.write_text`, `unlink`, or one-off `.bak` logic to commands.
+The snapshot staging directory is the one deliberate higher-level exception;
+it is isolated from the source and verified before publication.
+
+Mutating operations traverse sheets with `allow_external=False`. A project may
+legally reference an external sheet, but Terrarium must surface that boundary
+instead of silently changing another project.
+
+## Resolution behavior
+
+`core.resolve` handles:
+
+- project tables shadowing global tables, including broken project entries;
+- an explicit global-only view used to migrate a known shadow without
+  pretending normal KiCad resolution falls through it;
+- nested `(type "Table")` indirection with cycle detection;
+- macOS, Linux/XDG, and Windows configuration roots;
+- `${KIPRJMOD}` and versioned KiCad symbol/footprint/model/template variables;
+- user variables from the newest `kicad_common.json`;
+- environment variables and table-relative paths;
+- packed files and unpacked folders;
+- explicit diagnostics for unresolved variables, missing paths, bad tables, and
+  unsupported DB/HTTP/foreign sources.
+
+Do not silently fall back to a global library when a project entry with the same
+nickname is dangling. KiCad shadowing makes the dangling entry authoritative;
+concealing it gives `seal` and `audit` a false view of the project.
+
+## Fit policy
+
+`hand-solder` is a convenience profile, not a component qualification model.
+Every invocation prints its limitations. Custom capacitor rules require:
+
+- parseable positive thresholds;
+- unique ascending thresholds;
+- exactly one final catch-all;
+- non-empty `Library:Footprint` IDs at the CLI boundary.
+
+Only empty, on-board, non-DNP resistors and generic non-polar capacitors are
+eligible. Existing footprints are immutable. Inductors and polarized capacitors
+remain human decisions.
+
+## Terminal UI
+
+The status system colors only a short semantic word (`done`, `plan`, `warning`,
+`error`, `unchanged`). Avoid emoji/checkmark/cross ornament and rainbow output.
+`NO_COLOR`, `--color`, and light/dark botanical palettes are part of the public
+behavior.
+
+The curses browser remains a thin view over the pure navigation state in
+`core/browse.py`; symbol transfer belongs in workflows rather than the UI loop.
+
+## Quality gate
+
+Set up:
+
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"
+```
+
+Before merging:
+
+```bash
+.venv/bin/ruff check src tests
+.venv/bin/ruff format --check src tests
+.venv/bin/mypy src
+.venv/bin/pytest --cov --cov-report=term-missing --cov-fail-under=75
+.venv/bin/python -m build
+.venv/bin/twine check dist/*
+```
+
+Mypy runs in strict mode. CI covers Python 3.10, 3.12, and 3.14 and builds the
+distribution on the newest interpreter.
+
+Tests should prefer real minimal S-expression fixtures over mocked call graphs.
+The highest-value regression corpus includes:
+
+- arbitrary valid formatting and escaped strings;
+- missing definitions despite present registrations;
+- malformed and multiline library tables;
+- namespaced external sources coexisting with their complete global libraries;
+- migration of recognized legacy shadows with automatic recovery backups;
+- preservation of deliberate project-local libraries;
+- project aliases whose nickname differs from filename;
+- custom KiCad variables and broken shadow entries;
+- directory/unpacked vaults and duplicate symbol ambiguity;
+- conflicting same-name definitions;
+- stale writes, lock files, path escapes, rollback, and unique backups;
+- end-to-end command and snapshot flows;
+- deterministic, changing ASCII renderer frames.
+
+When available, validate generated libraries with the installed KiCad CLI as an
+additional integration authority:
+
+```bash
+kicad-cli sym export svg -o /tmp/terrarium-check library/Foo.kicad_sym
+kicad-cli sch erc board.kicad_sch
+```
+
+Those checks are optional because KiCad is not available on all CI runners; they
+do not replace the source-preservation tests.
+
+## Release discipline
+
+- Keep `pyproject.toml` and `kicad_terrarium.__version__` synchronized.
+- Update `CHANGELOG.md` for user-visible behavior.
+- Build both wheel and sdist and run `twine check`.
+- Do not describe a version as released until an artifact or tag actually
+  exists.
+- Do not commit `build/`, `dist/`, egg-info, caches, demo projects, lock files,
+  or user configuration.

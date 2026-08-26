@@ -1,174 +1,321 @@
 # kicad-terrarium
 
-A terrarium is a sealed glass world: everything the ecosystem needs, carried
-inside, alive on any shelf you put it on. **kicad-terrarium makes a KiCad
-project like that** — every symbol the design uses is vendored into the
-project and verified, so it opens complete on any machine, in five years,
-with no global libraries and no memory of your setup.
+**Custom symbols in; self-contained projects out.**
 
-The tool draws one line and keeps it: **mechanics belong to the tool,
-judgment belongs to the engineer.** It counts, copies, registers, and checks;
-it never chooses your parts or guesses your intent. Everything irreversible
-is preceded by `--dry-run` and a `.bak`; everything checkable exits nonzero
-so CI can watch it.
+kicad-terrarium is a fast, local-first KiCad library workflow. It lets you find
+and add a custom symbol in a few keystrokes instead of fighting KiCad's library
+GUIs, then seal and audit the project so collaborators receive the same editable
+symbol sources you used.
+
+The name is the product philosophy: a finished project should be a terrarium —
+self-contained, inspectable, and alive without depending on one engineer's
+machine.
+
+> Current status: **0.2 beta.** The symbol workflow is usable and deliberately
+> conservative. Footprint and 3D-model *auditing* exists; automatic footprint and
+> model vendoring does not yet.
+
+## The workflow
+
+Configure a reusable vault once. A vault can be one packed library or a folder
+of nested sub-libraries:
+
+```bash
+kt init --vault ~/Documents/KiCad/terrarium-vault \
+  --projects ~/Documents/electronics
+```
+
+Then, from a KiCad project:
+
+```bash
+kt browse                 # browse/search visually, then select
+kt pluck SHT41            # or pull a known symbol directly from the vault
+kt fit --dry-run          # preview an explicit passive-footprint policy
+kt audit                  # layout-critical mechanical checks
+kt seal                   # pin sources under collision-free local nicknames
+kt verify                 # prove the used definitions are really present
+```
+
+For a professional handoff without changing your working copy:
+
+```bash
+kt seal --snapshot ../my-board-handoff
+```
+
+The snapshot is built separately, sealed, deeply verified, and only then moved
+into place. The original project is untouched.
+
+## Why this exists
+
+KiCad's library managers are capable but expensive to traverse while a project
+is taking shape. The common high-friction moment is small: you already made a
+good custom part, you know roughly where it lives, and you want it in the new
+project now. `pluck`, `list`, and `browse` turn that into a local search and a
+couple of keys.
+
+The second problem appears at handoff. Since KiCad 6, schematics embed resolved
+symbol copies, which is excellent for opening and rendering a design. That is
+not the same as shipping the editable source libraries and project table needed
+to select more symbols, inspect provenance, or maintain the project normally.
+Terrarium makes that source layer travel too.
+
+This is useful for:
+
+- engineers who repeatedly reuse custom parts across new projects;
+- teams reviewing or extending a design on another workstation;
+- client, manufacturing, classroom, or open-source handoffs;
+- archival snapshots where external library drift is unacceptable.
+
+It is intentionally not a component downloader, electrical-rule oracle, or
+replacement for KiCad.
 
 ## Commands
 
-Most commands default to the project in the current directory, so from inside
-a project you can just run `kt seal`, `kt verify`, `kt audit`. (`kt` is a
-short alias for `kicad-terrarium`.)
+| Command | Purpose |
+|---|---|
+| `init` | Configure a file/folder vault and project search roots |
+| `browse` | Full-screen search/navigation across vault and project symbols |
+| `list` | List projects, libraries, or symbols without opening KiCad |
+| `pluck` | Copy one symbol and inherited parents into a project |
+| `sprout` | Promote one project symbol into the reusable vault |
+| `scan` | Show the libraries and exact symbols used by reachable sheets |
+| `fit` | Fill empty resistor/non-polar-C footprints using a named policy |
+| `audit` | Check assignments, files, pin/pad consistency, sheets, and models |
+| `seal` | Finalize all used symbol sources in place or into a snapshot |
+| `verify` | Verify local registrations, containment, files, definitions, and parents |
+| `prune` | Remove unused definitions using table nicknames, including aliases |
+| `graft` | Deliberately rename exact library references across project sheets |
 
-| Command | What it does |
-|---------|-------------|
-| `scan [root]` | Count symbols per library (`--precise` lists exact names) |
-| `seal [root]` | Copy every used symbol into `./library/`, register it, one command |
-| `audit [root]` | Read-only lint: the mechanical gaps that bite during layout |
-| `verify [root]` | Exit 1 unless every used library is registered project-locally |
-| `list [target]` | Browse configured projects, or the symbols in a library or project |
-| `pluck <symbol>` | Copy a symbol down into a project, before you place it |
-| `sprout <symbol>` | Copy a symbol up into your vault, to reuse later |
-| `browse` | Interactive menu over pluck/sprout: arrow-key through libraries and projects |
-| `init` | Interactive first-run setup (vault + project roots) |
-| `fit [root]` | Assign footprints to unassigned resistors and capacitors by value |
-| `prune [root]` | Trim project-local libraries to exactly the symbols used |
-| `graft [root] --old X --new Y` | Rewrite lib references (advanced; only for renaming) |
+Every mutating command supports `--dry-run`. `--json` is available globally for
+automation:
 
-### `seal`
-
-```
-$ kt seal
-Device: 7 used -> 7 symbols
-  ✓ wrote library/Device.kicad_sym
-MCU_ST_STM32G4: 1 used -> 2 symbols (+1 inherited parents)
-  ✓ wrote library/MCU_ST_STM32G4.kicad_sym
-...
-✓ registered 8 libraries in sym-lib-table
+```bash
+kt --json scan --precise
+kt --json verify
+kt --color never audit
+kt --version
 ```
 
-"Sealing" is *vendoring* in software terms — copying your dependencies in so
-the project no longer relies on the outside world. It reads the project and
-global `sym-lib-table`s (including KiCad 10's nested stock-table indirection)
-to find each library's source, copies the used symbols **byte-for-byte** —
-plus every `extends` parent, without which a sealed library silently cannot
-be drawn — and registers the copies under their original names so they shadow
-the globals. No schematic file is touched: shadowing keeps the operation
-non-destructive and idempotent (safe to re-run before every commit). Libraries
-with no table entry are reported as orphaned, sealable one at a time with
-`--source/--library/--output`.
+Global options go before the command.
 
-Byte-for-byte matters: structural parsers can silently drop what they don't
-understand (we watched one erase every `hide` flag in a KiCad 10 library).
-Vendored symbols are verbatim slices of their source.
+Project traversal visits each reachable schematic file once. Scan/audit counts
+are therefore source placements, not expanded counts for a sheet instantiated
+multiple times in a hierarchical design.
 
-### `audit`
+## Vaults and sub-libraries
 
-Checks that need no judgment, only thoroughness — which is exactly what
-programs are better at than people:
+All of these are valid vault shapes:
 
-- symbols with no footprint assigned
-- footprint references that resolve to no library or no file
-- **symbol pins with no matching pad on the assigned footprint**
-- sheet files nothing references
-- 3D model paths that won't travel with the project
+```text
+custom_symbols.kicad_sym             one packed library
 
-The pin/pad check alone has caught two wrong default footprints shipped in
-KiCad's official libraries (a 10-pin comparator paired with SOIC-8, an 8-pin
-switch paired with SC-70-6) — defects that otherwise surface deep into
-layout. `audit` is read-only and safe to run while KiCad is open.
+terrarium-vault/                     a folder of sub-libraries
+  passives.kicad_sym
+  sensors/
+    environmental.kicad_sym
+    magnetic.kicad_sym
 
-### `list`, `pluck`, and `sprout`
-
-`seal` works backward from what a project already uses. `pluck` and `sprout`
-work forward from intent, moving a single symbol between a project and your
-**vault** — the curated library of reusable, known-good parts you carry across
-projects (`curated_library` in the config; the tool calls it your *vault* in
-its output):
-
-```
-$ kt list                          # projects, from your config
-$ kt list ~/lib/custom_symbols.kicad_sym  # symbols in a library
-$ kt pluck Conn_Coaxial_INVERT     # vault → the project here
-$ kt sprout OPA320                 # the project here → vault
+Device.kicad_symdir/                 one KiCad unpacked library
+  R.kicad_sym
+  C.kicad_sym
 ```
 
-- **`pluck`** pulls a symbol *down* into a project before you place it, so you
-  never mine an old project or open KiCad to reuse a part. Source defaults to
-  your vault, destination to the project here (`--from`/`--into` to override).
-- **`sprout`** pushes a symbol *up* into your vault, so it grows from real
-  reuse — the moment you think "I'll want this again."
+An ordinary folder is treated as a hierarchy of logical libraries. A
+`.kicad_symdir` is treated as one unpacked logical library. If the same symbol
+name exists in several sub-libraries, Terrarium refuses to guess:
 
-Both copy byte-for-byte with inherited parents and merge without disturbing
-what's already there. Configure locations with `kt init`, or in
-`~/.config/kicad-terrarium/config.json`:
+```bash
+kt pluck SharedPart --from-library sensors/environmental
+```
+
+By default, a plucked source such as `sensors/environmental` is registered under
+the project nickname `Terrarium__sensors__environmental`. This avoids masking a
+global library with the same name while keeping nested source identities
+distinct. Use `--as` only when you deliberately want another exact destination
+nickname.
+
+To sprout into a nested vault library:
+
+```bash
+kt sprout MySensor --library sensors/environmental
+```
+
+The project side of `browse` indexes project-local source libraries. Run
+`seal` first when an older project still resolves all of its sources globally.
+
+## What `seal` guarantees
+
+`seal` reads every reachable schematic, resolves KiCad's project and global
+library tables, follows nested table entries, expands standard and user-defined
+KiCad path variables, and copies each used definition plus its transitive
+`extends` parents.
+
+External sources receive deterministic project-local identities such as
+`Terrarium__Connector` and live under `library/terrarium/`. Terrarium rewrites
+only the corresponding schematic source identifiers in the same atomic plan.
+The ordinary global `Connector` library therefore remains fully searchable in
+KiCad while existing project symbols stay pinned to their local editable
+definitions. Generated dependency libraries can remain loaded but hidden from
+the symbol chooser; actively plucked workbench libraries remain visible.
+
+A valid user-owned project library already organized inside the project is
+preserved without renaming. Older same-nickname libraries explicitly marked as
+Terrarium-managed are migrated automatically. Their registrations and exact
+schematic references are replaced together, and the retired files plus every
+changed schematic/table receive adjacent `.bak`, `.bak.1`, … recovery copies.
+
+`verify` does not stop at “the nickname appears in `sym-lib-table`.” It checks:
+
+- the entry is enabled, unique, and a supported KiCad source;
+- its URI is project-relative rather than machine-specific;
+- its path resolves inside the project and exists;
+- every used symbol definition is present;
+- every required inheritance parent is present;
+- unpacked directory libraries contain no conflicting definitions.
+
+The narrower claim matters: this verifies **symbol-source completeness**. Until
+footprint/model sealing lands, `audit` may still report external physical assets.
+If an original symbol source is already gone, `seal` fails rather than silently
+presenting the schematic's embedded display cache as provenance-equivalent
+source.
+
+### Why the namespace is worth having
+
+KiCad maps one nickname to one underlying library and gives project entries
+precedence over globals. A pruned project library named `Connector` would hide
+every global connector that was not copied. Namespacing avoids that false
+choice: current-design sources are portable and pinned, while the complete
+installed catalog remains available for continued design work.
+
+Terrarium creates at most one managed library per logical source, never one
+per symbol or invocation. It copies only the used dependency closure rather
+than mirroring complete KiCad libraries. The vault remains the reusable source;
+the project copy is a deliberate pinned snapshot.
+
+### Migrating an older Terrarium project
+
+Close KiCad, make a normal version-control commit or copy the project folder,
+then preview the exact migration:
+
+```bash
+kt seal /path/to/board.kicad_sch --dry-run
+```
+
+Only entries whose description identifies them as Terrarium-managed are
+automatically migrated; deliberate project-local libraries are preserved. Apply
+and verify:
+
+```bash
+kt seal /path/to/board.kicad_sch
+kt verify /path/to/board.kicad_sch
+```
+
+The first command keeps adjacent backups of every changed schematic/table and
+each retired legacy library. Open the project and confirm both its existing
+symbols and a search in a formerly shadowed global library before treating the
+migration as accepted.
+
+## Safe mutation model
+
+Terrarium plans the complete operation before writing anything. A plan:
+
+- rejects paths outside its project/vault boundary;
+- rejects ambiguous symbols and conflicting same-name definitions;
+- refuses external sub-sheet mutation;
+- checks KiCad project and symbol-library lock files before writes;
+- hashes every destination and detects changes made after planning;
+- stages and fsyncs writes beside their destination;
+- uses atomic replacement and rolls back a partial commit;
+- keeps adjacent, unique `.bak`, `.bak.1`, … recovery copies.
+
+Do not intentionally run a write command while KiCad has the project open.
+Terrarium checks known lock names, but no external lock protocol is infallible.
+
+## `fit` is a policy, not an oracle
+
+`fit` only fills empty resistor and generic non-polar capacitor footprints. It
+never overwrites an assignment. It leaves inductors alone because package choice
+needs saturation-current data, and leaves polarized capacitors alone because
+technology and package cannot be inferred safely from capacitance.
+
+The bundled `hand-solder` profile uses 0603 resistors, 0603 generic capacitors
+through 1 µF, and 0805 above. That is an assembly-convenience baseline — it does
+**not** validate voltage rating, dielectric, DC-bias derating, power, tolerance,
+or availability. The selected policy is printed every time.
+
+Custom rules live in the config:
 
 ```json
 {
-  "curated_library": "~/Documents/KiCad/libraries/custom_symbols.kicad_sym",
-  "project_roots": ["~/Documents/KiCad/projects"]
+  "vault": "~/Documents/KiCad/terrarium-vault",
+  "project_roots": ["~/Documents/electronics"],
+  "fit_profile": "custom",
+  "sizing": {
+    "resistor": "Resistor_SMD:R_0805_2012Metric",
+    "capacitor": [
+      {"max": "100nF", "footprint": "Capacitor_SMD:C_0603_1608Metric"},
+      {"max": "4.7uF", "footprint": "Capacitor_SMD:C_0805_2012Metric"},
+      {"footprint": "Capacitor_SMD:C_1206_3216Metric"}
+    ]
+  },
+  "theme": "auto"
 }
 ```
 
-Name your vault *descriptively*, not after yourself: because sealing keeps
-original names, its name propagates into every project that uses it, so
-`custom_symbols` reads better in a shared repo than a personal handle.
+Malformed thresholds, duplicate thresholds, missing catch-alls, and malformed
+footprint IDs are hard errors rather than silent fallbacks.
 
-Explored a lot and plucked symbols you didn't end up placing? **`prune`** trims
-every project-local library back to exactly the symbols the schematic uses
-(keeping inherited parents), and drops any library left entirely unused — so a
-project stays minimal no matter how much you tried.
+## Terminal design
 
-`browse` is a full-screen arrow-key menu over the same operations, with a small
-potted sprout swaying in the corner. Drill from your vault or any project into
-its symbols; picking a **project** symbol offers *pluck it here* or *sprout it
-up*, while a **vault** symbol plucks straight in. It's a thin
-shell — navigation is a tested pure state machine (`core.browse`), and every
-action is also a plain command, so scripts never depend on it. (stdlib
-`curses`; Unix terminals only. The rest of the tool is cross-platform.)
-
-### `fit`
-
-Passive package is partly a function of value: a 10 µF needs more physical
-volume than a 100 nF, and an undersized MLCC quietly loses capacitance to
-DC-bias derating. `fit` assigns footprints to unassigned resistors and
-capacitors from a value table (default: all R at 0603; C at 0603 up to 1 µF,
-0805 above), fills only empty footprints, and **leaves inductors alone** —
-their package depends on saturation current, which no value reveals. Override
-the table under `"sizing"` in the config; always previewable with `--dry-run`.
-
-## Install
+Terrarium uses a restrained botanical identity rather than generic rainbow
+status output. Only compact status labels carry semantic color; the useful text
+stays neutral. The banner has separate dark- and light-background forest
+palettes:
 
 ```bash
-pipx install kicad-terrarium
+kt --theme light          # beige, papyrus, or other light terminal background
+kt --theme dark
+NO_COLOR=1 kt audit       # standard no-color convention
 ```
 
-## Develop
+The full-screen browser needs `curses` and an interactive input/output terminal.
+Search with `/`; all underlying actions remain ordinary scriptable commands.
+
+## Install and develop
+
+Until a public package is published, install from a checkout:
 
 ```bash
-pip install -e ".[dev]"
-ruff check src tests && ruff format src tests && mypy src && pytest
+pipx install .
+# or, for development
+python -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"
 ```
 
-Pure-core architecture: everything in `core/` is data-in/data-out (file
-reads are injected), which is why the test suite needs no fixtures beyond
-strings. The CLI is a thin I/O shell. Constraints and architecture notes
-live in DEVELOPMENT.md.
+Quality gate:
 
-## Roadmap
+```bash
+ruff check src tests
+ruff format --check src tests
+mypy src
+pytest --cov --cov-fail-under=75
+python -m build
+twine check dist/*
+```
 
-- footprints: seal `.pretty` libraries and 3D models the same way
-  (`fp-lib-table` is the same format)
-- configurable value→package rules for passives (capacitors and resistors
-  only — inductor packages depend on saturation current, which is a
-  judgment call, so the tool refuses on principle)
-- orphan recovery: search a path for libraries that contain a missing symbol
+See [DEVELOPMENT.md](DEVELOPMENT.md) for the architecture and invariants, and
+[the namespaced-vendoring rationale](docs/namespaced-vendoring.md) for the
+central KiCad design decision.
 
-## Related work
+## Explicit non-goals for now
 
-[Component importer for KiCad](https://github.com/robertxdx/component-importer-for-kicad)
-solves the opposite, inbound problem — unpacking downloaded SnapEDA/SamacSys/
-Ultra Librarian zips into your libraries. A healthy workflow can use both:
-it imports parts at design time, terrarium seals and lints the project at
-layout time.
+- no cloud account, daemon, telemetry, or proprietary catalog;
+- no automatic electrical part selection;
+- no inductor sizing from value alone;
+- no schematic-wide consolidation as the default;
+- no database/HTTP/foreign-library extraction masquerading as supported;
+- no automatic footprint or 3D-model vendoring until their portability model is
+  implemented and tested end to end.
 
 ## License
 
