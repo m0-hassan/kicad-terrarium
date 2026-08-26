@@ -3,3 +3,11 @@ __pycache__/
 *.egg-info/
 demo/
 build/
+dist/
+.coverage
+coverage.xml
+htmlcov/
+.DS_Store
+*.bak
+*.bak.*
+~*.lck
