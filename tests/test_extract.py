@@ -1,4 +1,7 @@
+import pytest
+
 from kicad_terrarium.core.extract import (
+    InheritanceError,
     assemble_library,
     extends_closure,
     library_version,
@@ -45,6 +48,11 @@ def test_symbol_blocks_ignores_layout():
     assert set(symbol_blocks(lib)) == {"A", "B"}
 
 
+def test_symbol_blocks_rejects_a_balanced_but_wrong_document():
+    with pytest.raises(ValueError, match="kicad_symbol_lib"):
+        symbol_blocks('(kicad_sch (symbol "A"))')
+
+
 def test_extends_closure_pulls_in_parents_first():
     ordered, missing = extends_closure({"R_US"}, symbol_blocks(LIB))
     assert ordered == ["R", "R_US"]
@@ -57,10 +65,36 @@ def test_extends_closure_reports_missing_names():
     assert missing == {"Nope"}
 
 
+def test_extends_closure_ignores_parent_like_text_in_a_property():
+    blocks = symbol_blocks(
+        "(kicad_symbol_lib (version 20251024) "
+        '(symbol "A" (property "Description" "example (extends \\"NotAParent\\")")))'
+    )
+    assert extends_closure({"A"}, blocks) == (["A"], set())
+
+
+def test_extends_closure_rejects_cycles():
+    cyclic = {
+        "A": '(symbol "A" (extends "B"))',
+        "B": '(symbol "B" (extends "A"))',
+    }
+    with pytest.raises(InheritanceError, match="A -> B -> A"):
+        extends_closure({"A"}, cyclic)
+
+
 def test_assemble_library_reuses_source_version():
     blocks = symbol_blocks(LIB)
     out = assemble_library(["C"], blocks, LIB)
     assert "(version 20251024)" in out and out.startswith("(kicad_symbol_lib")
+
+
+def test_assemble_library_preserves_crlf_without_doubling_carriage_returns():
+    source = LIB.replace("\n", "\r\n")
+    blocks = symbol_blocks(source)
+    out = assemble_library(["R"], blocks, source)
+    assert "\r\r\n" not in out
+    assert blocks["R"] in out
+    assert out.count("\r\n") == out.count("\n")
 
 
 def test_vendor_library_end_to_end():
@@ -112,3 +146,14 @@ def test_prune_library_nothing_used_removes_everything():
 def test_prune_library_all_used_is_a_noop():
     _, kept, removed = prune_library(LIB, {"R", "R_US", "C"})
     assert removed == [] and set(kept) == {"R", "R_US", "C"}
+
+
+def test_prune_refuses_to_preserve_a_symbol_without_its_parent():
+    broken = '(kicad_symbol_lib (version 20251024) (symbol "Child" (extends "Gone")))'
+    with pytest.raises(ValueError, match="missing used definitions or parents"):
+        prune_library(broken, {"Child"})
+
+
+def test_prune_refuses_to_delete_a_library_missing_its_used_symbol():
+    with pytest.raises(ValueError, match="Missing"):
+        prune_library(LIB, {"Missing"})

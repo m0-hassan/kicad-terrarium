@@ -52,6 +52,10 @@ def test_foreign_model_paths_flags_only_untravelable_refs():
     mod = (
         '(model "${KIPRJMOD}/library/3dmodels/a.step")'
         '(model "${KICAD10_3DMODEL_DIR}/b.wrl")'
+        '(model "${KICAD_PERSONAL_MODELS}/custom.step")'
         '(model "/Users/someone/Downloads/c.step")'
     )
-    assert foreign_model_paths(mod) == ["/Users/someone/Downloads/c.step"]
+    assert foreign_model_paths(mod) == [
+        "${KICAD_PERSONAL_MODELS}/custom.step",
+        "/Users/someone/Downloads/c.step",
+    ]

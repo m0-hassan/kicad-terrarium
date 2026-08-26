@@ -1,100 +1,185 @@
+"""Discover project references without depending on KiCad's indentation.
+
+KiCad files are S-expressions, but Terrarium deliberately does not round-trip
+them through an object model. This module reads only the forms it needs and
+edits exact source spans, preserving every unknown field around them.
+"""
+
+from __future__ import annotations
+
 import re
 from collections import Counter
 from collections.abc import Callable
 
-# Matches lines like (lib_id "al-mawja-library:C") and captures the ID
+from kicad_terrarium.core.models import PlacedSymbol, SymbolId
+from kicad_terrarium.core.sexpr import (
+    Form,
+    SExprError,
+    apply_replacements,
+    atoms,
+    child_forms,
+    forms,
+    quote,
+    quoted_tokens,
+)
 
-_LIB_ID_PATTERN = re.compile(r'\(lib_id "([^"]+)"\)')
-
-
-def find_lib_ids(text: str) -> list[str]:
-    """Return every lib_id string in a KiCad file, e.g. ['Device:R', 'Device:C']"""
-    return _LIB_ID_PATTERN.findall(text)
-
-
-_SHEETFILE_PATTERN = re.compile(r'\(property "Sheetfile" "([^"]+)"')
-
-
-def sheet_files(text: str) -> list[str]:
-    """
-    Return child sheet filenames a schematic references, e.g. ['power.kicad_sch'].
-    """
-    return _SHEETFILE_PATTERN.findall(text)
+_FRAGMENT_LIB_ID = re.compile(r'\(lib_id\s+"([^"\\]*(?:\\.[^"\\]*)*)"')
+_FRAGMENT_SHEETFILE = re.compile(r'\(property\s+"Sheetfile"\s+"([^"\\]*(?:\\.[^"\\]*)*)"')
 
 
-def library_counts(lib_ids: list[str]) -> Counter:
-    """
-    Count how many symbols reference each library
-
-    Example: ["Device:R", "Device:C", "Connector:X"] -> {"Device": 2, "Connector": 1}
-    """
-    return Counter(lib_id.split(":", 1)[0] for lib_id in lib_ids)
+def _first_string(text: str, form: Form) -> str | None:
+    tokens = quoted_tokens(text, form)
+    return tokens[0].value if tokens else None
 
 
-_INSTANCE_SPLIT = re.compile(r"\n\t\(symbol\n")
-_LIB_ID = re.compile(r'\(lib_id "([^"]+)"\)')
-_REF_PROP = re.compile(r'\(property "Reference" "([^"]*)"')
-_VALUE_PROP = re.compile(r'\(property "Value" "([^"]*)"')
-_FP_PROP = re.compile(r'\(property "Footprint" "([^"]*)"')
+def find_lib_ids(text: str, *, strict: bool = False) -> list[str]:
+    """Return every structurally valid ``lib_id`` in source order."""
+    result: list[str] = []
+    try:
+        all_forms = forms(text)
+    except SExprError:
+        if strict:
+            raise
+        return _FRAGMENT_LIB_ID.findall(text)
+    roots = [form for form in all_forms if form.depth == 0 and form.head == "kicad_sch"]
+    if strict and len(roots) != 1:
+        raise SExprError(f"expected one kicad_sch root, found {len(roots)}")
+    for form in all_forms:
+        if form.head == "lib_id" and (value := _first_string(text, form)) is not None:
+            result.append(value)
+    return result
 
-# decide(reference, lib_id, value, current_footprint) -> new footprint | None
-Decider = Callable[[str, str, str, str], "str | None"]
+
+def sheet_files(text: str, *, strict: bool = False) -> list[str]:
+    """Return filenames from KiCad ``Sheetfile`` properties."""
+    try:
+        all_forms = forms(text)
+    except SExprError:
+        if strict:
+            raise
+        return _FRAGMENT_SHEETFILE.findall(text)
+    roots = [form for form in all_forms if form.depth == 0 and form.head == "kicad_sch"]
+    if strict and len(roots) != 1:
+        raise SExprError(f"expected one kicad_sch root, found {len(roots)}")
+    if len(roots) == 1:
+        candidates = [
+            property_form
+            for sheet in child_forms(all_forms, roots[0], "sheet")
+            for property_form in child_forms(all_forms, sheet, "property")
+        ]
+    else:
+        candidates = [form for form in all_forms if form.head == "property"]
+    result: list[str] = []
+    for form in candidates:
+        if form.head != "property":
+            continue
+        values = quoted_tokens(text, form)
+        if len(values) >= 2 and values[0].value == "Sheetfile":
+            result.append(values[1].value)
+    return result
+
+
+def library_counts(lib_ids: list[str]) -> Counter[str]:
+    """Count placed-symbol references by library nickname."""
+    return Counter(lib_id.split(":", 1)[0] for lib_id in lib_ids if ":" in lib_id)
+
+
+def _bool_field(text: str, children: list[Form], head: str, default: bool) -> bool:
+    field = next((child for child in children if child.head == head), None)
+    if field is None:
+        return default
+    values = atoms(text, field)
+    return not values or values[0].lower() not in {"no", "false", "0"}
+
+
+def placed_symbols(text: str) -> list[PlacedSymbol]:
+    """Read placed symbols, excluding definitions in ``lib_symbols``."""
+    all_forms = forms(text)
+    roots = [form for form in all_forms if form.depth == 0 and form.head == "kicad_sch"]
+    if len(roots) != 1:
+        return []
+
+    result: list[PlacedSymbol] = []
+    for symbol in child_forms(all_forms, roots[0], "symbol"):
+        children = child_forms(all_forms, symbol)
+        lib_form = next((child for child in children if child.head == "lib_id"), None)
+        lib_id = _first_string(text, lib_form) if lib_form else None
+        if lib_id is None:
+            continue
+        try:
+            symbol_id = SymbolId.parse(lib_id)
+        except ValueError as error:
+            raise ValueError(f"placed symbol has {error}") from error
+        properties: dict[str, str] = {}
+        for prop in children:
+            if prop.head != "property":
+                continue
+            values = quoted_tokens(text, prop)
+            if len(values) >= 2:
+                properties[values[0].value] = values[1].value
+        result.append(
+            PlacedSymbol(
+                reference=properties.get("Reference", "?"),
+                symbol_id=symbol_id,
+                value=properties.get("Value", ""),
+                footprint=properties.get("Footprint", ""),
+                on_board=_bool_field(text, children, "on_board", True),
+                in_bom=_bool_field(text, children, "in_bom", True),
+                dnp=_bool_field(text, children, "dnp", False),
+            )
+        )
+    return result
 
 
 def symbol_instances(text: str) -> list[tuple[str, str, str]]:
-    """(reference, lib_id, footprint) for every placed symbol in a schematic.
+    """Compatibility view: ``(reference, lib_id, footprint)`` for placements."""
+    return [(item.reference, str(item.symbol_id), item.footprint) for item in placed_symbols(text)]
 
-    Splits on the instance blocks that follow the lib_symbols cache; the
-    cache itself never matches because its symbols carry their name on the
-    same line.
-    """
-    instances = []
-    for part in _INSTANCE_SPLIT.split(text)[1:]:
-        lib_id = _LIB_ID.search(part)
-        if not lib_id:
-            continue
-        ref = _REF_PROP.search(part)
-        fp = _FP_PROP.search(part)
-        instances.append((ref.group(1) if ref else "?", lib_id.group(1), fp.group(1) if fp else ""))
-    return instances
+
+Decider = Callable[[str, str, str, str], str | None]
 
 
 def reassign_footprints(text: str, decide: Decider) -> tuple[str, list[tuple[str, str]]]:
-    """Rewrite instance Footprint fields via `decide`, leaving all else byte-exact.
+    """Rewrite only placed-symbol Footprint value spans selected by ``decide``."""
+    all_forms = forms(text)
+    roots = [form for form in all_forms if form.depth == 0 and form.head == "kicad_sch"]
+    if len(roots) != 1:
+        return text, []
 
-    `decide` receives (reference, lib_id, value, current_footprint) and returns
-    a new footprint, or None to leave the symbol unchanged. Returns the new
-    schematic text and the (reference, footprint) pairs actually changed.
-    """
-    parts = _INSTANCE_SPLIT.split(text)
+    replacements: list[tuple[int, int, str]] = []
     applied: list[tuple[str, str]] = []
-    for i in range(1, len(parts)):
-        part = parts[i]
-        lib_id = _LIB_ID.search(part)
-        fp = _FP_PROP.search(part)
-        if not lib_id or not fp:
+    for symbol in child_forms(all_forms, roots[0], "symbol"):
+        children = child_forms(all_forms, symbol)
+        lib_form = next((child for child in children if child.head == "lib_id"), None)
+        lib_id = _first_string(text, lib_form) if lib_form else None
+        if lib_id is None:
             continue
-        ref = _REF_PROP.search(part)
-        value = _VALUE_PROP.search(part)
-        reference = ref.group(1) if ref else "?"
-        new = decide(reference, lib_id.group(1), value.group(1) if value else "", fp.group(1))
-        if new is not None and new != fp.group(1):
-            parts[i] = _FP_PROP.sub(
-                lambda m, nf=new: f'(property "Footprint" "{nf}"', part, count=1
-            )
-            applied.append((reference, new))
-    return "\n\t(symbol\n".join(parts), applied
+        properties: dict[str, tuple[str, Form]] = {}
+        for prop in children:
+            if prop.head != "property":
+                continue
+            values = quoted_tokens(text, prop)
+            if len(values) >= 2:
+                properties[values[0].value] = (values[1].value, prop)
+        footprint = properties.get("Footprint")
+        if footprint is None:
+            continue
+        reference = properties.get("Reference", ("?", footprint[1]))[0]
+        value = properties.get("Value", ("", footprint[1]))[0]
+        new = decide(reference, lib_id, value, footprint[0])
+        if new is None or new == footprint[0]:
+            continue
+        token = quoted_tokens(text, footprint[1])[1]
+        replacements.append((token.start, token.end, quote(new)))
+        applied.append((reference, new))
+    return apply_replacements(text, replacements), applied
 
 
 def used_symbols(lib_ids: list[str], library: str) -> set[str]:
-    """
-    Symbol names used from one specific library.
-
-    Example: used_symbols(["lib:C", "lib:R", "other:X"], "lib") -> {"C", "R"}
-    """
+    """Symbol names referenced from one exact library nickname."""
     names: set[str] = set()
     for lib_id in lib_ids:
-        lib, _, symbol = lib_id.partition(":")
-        if lib == library:
+        lib, separator, symbol = lib_id.partition(":")
+        if separator and lib == library:
             names.add(symbol)
     return names

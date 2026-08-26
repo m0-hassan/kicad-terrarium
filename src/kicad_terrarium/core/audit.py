@@ -1,56 +1,63 @@
-"""Read-only lint: the mechanical gaps that bite during layout.
+"""Read-only checks for mechanical schematic/footprint mistakes."""
 
-Every check here needs no judgment, only thoroughness — count symbol pins,
-count footprint pads, compare. Each one exists because it caught a real
-defect on a real board (a 10-pin symbol shipped with an 8-pad footprint by
-KiCad's own library; a shield pin numbered SH over pads named S1/S2).
-"""
+from __future__ import annotations
 
 import re
 
-from kicad_terrarium.core.extract import block_end
+from kicad_terrarium.core.sexpr import child_forms, descendant_forms, forms, quoted_tokens
 
-# pads: KiCad 6+ quotes the name; v5-era files leave it bare
-_PAD_QUOTED = re.compile(r'\(pad "([^"]*)"')
-_PAD_BARE = re.compile(r"\(pad ([^\s()\"]+)[\s(]")
-_PIN_NUMBER = re.compile(r'\(number "([^"]+)"')
-_MODEL = re.compile(r'\(model "([^"]+)"')
-_CACHE_SYMBOL = re.compile(r'\n\t\t\(symbol "([^"]+:[^"]+)"')
+_PAD_QUOTED = re.compile(r'\(pad\s+"((?:\\.|[^"\\])*)"')
+_PAD_BARE = re.compile(r"\(pad\s+([^\s()\"]+)[\s(]")
+_MODEL = re.compile(r'\(model\s+"((?:\\.|[^"\\])*)"')
+_STOCK_MODEL = re.compile(r"^\$\{(?:KICAD\d+_3DMODEL_DIR|KISYS3DMOD)\}(?:[/\\]|$)")
 
 
 def pad_names(mod_text: str) -> set[str]:
-    """Pad numbers/names in a .kicad_mod, old or new format, unnamed dropped."""
+    """Pad numbers/names in a ``.kicad_mod``; unnamed pads are omitted."""
     names = set(_PAD_QUOTED.findall(mod_text)) | set(_PAD_BARE.findall(mod_text))
     names.discard("")
     return names
 
 
 def cache_symbol_pins(sheet_text: str) -> dict[str, set[str]]:
-    """{lib_id: pin numbers} from a schematic's embedded lib_symbols cache.
-
-    The cache holds the complete resolved symbol (all units, inheritance
-    flattened), which makes it the authoritative pin list for every symbol
-    the sheet uses — no library lookup required.
-    """
+    """Map cached symbol IDs to pin numbers, independent of formatting."""
+    all_forms = forms(sheet_text)
+    libraries = [form for form in all_forms if form.head == "lib_symbols"]
+    if not libraries:
+        return {}
     pins: dict[str, set[str]] = {}
-    for m in _CACHE_SYMBOL.finditer(sheet_text):
-        start = m.start() + 1
-        block = sheet_text[start : block_end(sheet_text, start)]
-        pins[m.group(1)] = set(_PIN_NUMBER.findall(block))
+    for cached in child_forms(all_forms, libraries[0], "symbol"):
+        names = quoted_tokens(sheet_text, cached)
+        if not names:
+            continue
+        numbers: set[str] = set()
+        for number in descendant_forms(all_forms, cached, "number"):
+            values = quoted_tokens(sheet_text, number)
+            if values:
+                numbers.add(values[0].value)
+        pins[names[0].value] = numbers
     return pins
 
 
 def missing_pads(pins: set[str], pads: set[str]) -> set[str]:
-    """Symbol pin numbers with no matching pad — each one a broken net at
-    layout time. Extra pads (shields, thermal, mounting) are fine."""
+    """Symbol pin numbers with no matching pad; extra pads are acceptable."""
     return pins - pads
 
 
 def foreign_model_paths(mod_text: str) -> list[str]:
-    """3D model references that will not travel with the project: anything
-    not anchored to ${KIPRJMOD} (project-local) or ${KICAD...} (stock)."""
+    """3D model references that are neither project-local nor stock KiCad."""
     return [
         path
         for path in _MODEL.findall(mod_text)
-        if not path.startswith("${KIPRJMOD}") and not path.startswith("${KICAD")
+        if not path.startswith("${KIPRJMOD}") and not is_stock_model_path(path)
     ]
+
+
+def is_stock_model_path(path: str) -> bool:
+    """Whether a model URI uses a recognized KiCad installation variable."""
+    return _STOCK_MODEL.match(path) is not None
+
+
+def model_paths(mod_text: str) -> list[str]:
+    """Every 3D model URI in a footprint definition."""
+    return _MODEL.findall(mod_text)
