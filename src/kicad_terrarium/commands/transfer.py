@@ -178,6 +178,17 @@ def pluck(
         fail("no source given and no vault configured; run 'kt init'", code=2)
     source = _choose_source(source_path, symbol, from_library)
     root = resolve_root(into)
+    _execute_pluck(source, root, as_library=as_library, dry_run=dry_run)
+
+
+def _execute_pluck(
+    source: SymbolSource,
+    root: Path,
+    *,
+    as_library: str | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Apply one already-resolved symbol transfer without rediscovering its source."""
     try:
         result = plan_pluck(source, root, as_library=as_library)
     except (OSError, UnicodeError, ValueError, SExprError, MutationError) as error:
@@ -188,7 +199,7 @@ def pluck(
             {
                 "ok": True,
                 "dry_run": dry_run,
-                "symbol": symbol,
+                "symbol": source.symbol,
                 "library": result.library,
                 "destination": result.destination,
                 "added": result.added,
@@ -202,7 +213,7 @@ def pluck(
     console().print(
         status_line(
             status,
-            f"plucked {symbol}{parent_note} into {short_path(result.destination)}",
+            f"plucked {source.symbol}{parent_note} into {short_path(result.destination)}",
         )
     )
 
@@ -232,8 +243,19 @@ def sprout(
         fail("no vault configured; run 'kt init'", code=2)
     source_path = from_ or resolve_root(None)
     source = _choose_source(source_path, symbol, from_library)
+    _execute_sprout(source, config.vault, library=library, dry_run=dry_run)
+
+
+def _execute_sprout(
+    source: SymbolSource,
+    vault: Path,
+    *,
+    library: str | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Apply one already-resolved symbol transfer without rediscovering its source."""
     try:
-        result = plan_sprout(source, config.vault, library=library)
+        result = plan_sprout(source, vault, library=library)
     except (OSError, UnicodeError, ValueError, SExprError, MutationError) as error:
         fail(str(error), code=2)
     changed = apply_plan(result.plan, dry_run=dry_run)
@@ -242,7 +264,7 @@ def sprout(
             {
                 "ok": True,
                 "dry_run": dry_run,
-                "symbol": symbol,
+                "symbol": source.symbol,
                 "library": result.library,
                 "destination": result.destination,
                 "added": result.added,
@@ -252,7 +274,9 @@ def sprout(
         )
         return
     status = PLAN if dry_run and result.plan.changes else (DONE if changed else UNCHANGED)
-    console().print(status_line(status, f"sprouted {symbol} into {short_path(result.destination)}"))
+    console().print(
+        status_line(status, f"sprouted {source.symbol} into {short_path(result.destination)}")
+    )
 
 
 def _snapshot_ignore(_directory: str, names: list[str]) -> set[str]:
@@ -485,31 +509,13 @@ def _pluck(
     """Compatibility helper used by the interactive browser and API tests."""
     del curated
     source = _choose_source(src_file, symbol, None)
-    try:
-        result = plan_pluck(source, root, as_library=as_lib)
-    except (OSError, UnicodeError, ValueError, SExprError, MutationError) as error:
-        fail(str(error), code=2)
-    changed = apply_plan(result.plan, dry_run=dry_run)
-    status = PLAN if dry_run and result.plan.changes else (DONE if changed else UNCHANGED)
-    parent_note = f" with {', '.join(result.parents)}" if result.parents else ""
-    console().print(
-        status_line(
-            status,
-            f"plucked {symbol}{parent_note} into {short_path(result.destination)}",
-        )
-    )
+    _execute_pluck(source, root, as_library=as_lib, dry_run=dry_run)
 
 
 def _sprout(symbol: str, src_file: Path, curated: Path, dry_run: bool = False) -> None:
     """Compatibility helper used by the interactive browser and API tests."""
     source = _choose_source(src_file, symbol, None)
-    try:
-        result = plan_sprout(source, curated)
-    except (OSError, UnicodeError, ValueError, SExprError, MutationError) as error:
-        fail(str(error), code=2)
-    changed = apply_plan(result.plan, dry_run=dry_run)
-    status = PLAN if dry_run and result.plan.changes else (DONE if changed else UNCHANGED)
-    console().print(status_line(status, f"sprouted {symbol} into {short_path(result.destination)}"))
+    _execute_sprout(source, curated, dry_run=dry_run)
 
 
 def register(app: typer.Typer) -> None:

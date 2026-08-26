@@ -1,10 +1,7 @@
-from kicad_terrarium.cli import (
-    _build_browse_tree,
-    _PluckAction,
-    _sprout,
-    _SproutAction,
-)
+from kicad_terrarium.commands.browser import _build_browse_tree, _PluckAction, _SproutAction
+from kicad_terrarium.commands.transfer import _execute_pluck, _execute_sprout
 from kicad_terrarium.core.extract import symbol_blocks
+from kicad_terrarium.core.library import find_symbol_sources
 
 LIB = '(kicad_symbol_lib (version 20251024)\n\t(symbol "{name}"\n\t)\n)\n'
 
@@ -52,5 +49,30 @@ def test_sprout_adds_symbol_to_curated_library(tmp_path):
     src = tmp_path / "src.kicad_sym"
     src.write_text(LIB.format(name="NewPart"))
     curated = tmp_path / "custom_symbols.kicad_sym"  # doesn't exist yet
-    _sprout("NewPart", src, curated, dry_run=False)
+    source = find_symbol_sources(src, "NewPart")[0]
+    _execute_sprout(source, curated, dry_run=False)
     assert "NewPart" in symbol_blocks(curated.read_text())
+
+
+def test_nested_browser_pluck_preserves_the_source_namespace(tmp_path):
+    vault = tmp_path / "vault/sensors"
+    vault.mkdir(parents=True)
+    (vault / "environmental.kicad_sym").write_text(LIB.format(name="SHT41"))
+    tree = _build_browse_tree(tmp_path / "vault", [], dest_name="board")
+
+    vault_item = next(item for item in tree.items if item.label == "Vault")
+    sensor_group = next(item for item in vault_item.children if item.label == "sensors")
+    library = next(item for item in sensor_group.children if item.label == "environmental")
+    symbol = next(item for item in library.children if item.label == "SHT41")
+    assert isinstance(symbol.action, _PluckAction)
+    assert symbol.action.source.library.group == ("sensors",)
+
+    project = tmp_path / "project"
+    project.mkdir()
+    root = project / "board.kicad_sch"
+    root.write_text("(kicad_sch)")
+    (project / "board.kicad_pro").write_text("{}")
+    _execute_pluck(symbol.action.source, root)
+
+    assert (project / "library/terrarium/sensors/environmental.kicad_sym").is_file()
+    assert '(name "Terrarium__sensors__environmental")' in (project / "sym-lib-table").read_text()

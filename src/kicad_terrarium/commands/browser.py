@@ -10,30 +10,31 @@ from typing import Any, cast
 import typer
 
 from kicad_terrarium.commands.common import console, fail, load_user_config, resolve_root, runtime
-from kicad_terrarium.commands.transfer import _find_projects, _pluck, _sprout
+from kicad_terrarium.commands.transfer import _execute_pluck, _execute_sprout, _find_projects
 from kicad_terrarium.core.browse import Browser, Item, Screen, search_items
-from kicad_terrarium.core.library import LibrarySource, discover_libraries, source_blocks
+from kicad_terrarium.core.library import (
+    LibrarySource,
+    SymbolSource,
+    discover_libraries,
+    source_blocks,
+)
 
 
 @dataclass(frozen=True)
 class _PluckAction:
-    symbol: str
-    source: Path
-    library: str | None = None
+    source: SymbolSource
 
 
 @dataclass(frozen=True)
 class _SproutAction:
-    symbol: str
-    source: Path
-    library: str | None = None
+    source: SymbolSource
 
 
 def _curated_source_items(library: LibrarySource) -> list[Item]:
     return [
         Item(
             name,
-            action=_PluckAction(name, library.source_path, library.nickname),
+            action=_PluckAction(SymbolSource(name, library)),
         )
         for name in sorted(source_blocks(library))
     ]
@@ -55,14 +56,14 @@ def _project_source_items(
         choices = [
             Item(
                 f"Pluck into {dest_name}",
-                action=_PluckAction(name, library.source_path, library.nickname),
+                action=_PluckAction(SymbolSource(name, library)),
             )
         ]
         if curated_name is not None:
             choices.append(
                 Item(
                     f"Sprout into {curated_name}",
-                    action=_SproutAction(name, library.source_path, library.nickname),
+                    action=_SproutAction(SymbolSource(name, library)),
                 )
             )
         items.append(Item(f"{name}  [{library.nickname}]", children=choices))
@@ -274,11 +275,11 @@ def browse(
     except ModuleNotFoundError:
         fail("this Python installation has no curses support; use list/pluck/sprout", code=2)
     if isinstance(action, _PluckAction):
-        _pluck(action.symbol, action.source, root, config.vault, as_lib=action.library)
+        _execute_pluck(action.source, root)
     elif isinstance(action, _SproutAction):
         if config.vault is None:
             fail("no vault configured; run 'kt init'", code=2)
-        _sprout(action.symbol, action.source, config.vault)
+        _execute_sprout(action.source, config.vault)
     else:
         console().print("[dim]nothing changed[/dim]")
 
