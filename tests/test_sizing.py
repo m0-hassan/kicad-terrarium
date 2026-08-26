@@ -2,6 +2,7 @@ import pytest
 
 from kicad_terrarium.core.discover import reassign_footprints
 from kicad_terrarium.core.sizing import (
+    SizingConfigError,
     default_rules,
     footprint_for,
     parse_capacitance,
@@ -37,6 +38,8 @@ def test_parse_resistance(value, ohms):
 def test_parse_rejects_garbage():
     assert parse_capacitance("DNP") is None
     assert parse_resistance("") is None
+    assert parse_capacitance("nan") is None
+    assert parse_capacitance("inf") is None
 
 
 def test_footprint_for_dispatches_by_symbol_and_value():
@@ -53,6 +56,8 @@ def test_footprint_for_refuses_inductors_and_unknowns():
     assert footprint_for("Device:L", "15uH", rules) is None
     assert footprint_for("MCU_ST:STM32", "", rules) is None
     assert footprint_for("Device:C", "DNP", rules) is None  # unparseable value
+    assert footprint_for("Device:C", "-1uF", rules) is None
+    assert footprint_for("Device:C_Polarized", "100uF", rules) is None
 
 
 def test_rules_from_config_overrides_and_parses_thresholds():
@@ -72,6 +77,25 @@ def test_rules_from_config_overrides_and_parses_thresholds():
 
 def test_rules_from_config_empty_falls_back_to_defaults():
     assert rules_from_config({}) == default_rules()
+
+
+def test_invalid_threshold_cannot_silently_become_a_catch_all():
+    with pytest.raises(SizingConfigError, match="not a valid capacitance"):
+        rules_from_config(
+            {
+                "capacitor": [
+                    {"max": "definitely-not-a-value", "footprint": "small"},
+                    {"footprint": "large"},
+                ]
+            }
+        )
+
+
+def test_cli_strict_rules_require_both_footprint_id_parts():
+    with pytest.raises(SizingConfigError, match="Library:Footprint"):
+        rules_from_config({"resistor": ":"}, strict_footprints=True)
+    with pytest.raises(SizingConfigError, match="Library:Footprint"):
+        rules_from_config({"resistor": "Parts:../../escape"}, strict_footprints=True)
 
 
 SHEET = (
