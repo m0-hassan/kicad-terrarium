@@ -249,7 +249,7 @@ def audit(
     ),
     precise: bool = typer.Option(False, "--precise", help="Show every finding."),
 ) -> None:
-    """Check layout-critical assignments, files, pins/pads, sheets, and models."""
+    """Expose physical handoff risks across footprints, pins/pads, sheets, and models."""
     project = resolve_root(root)
     try:
         findings, physical_count = _audit_project(project)

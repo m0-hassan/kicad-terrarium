@@ -19,12 +19,12 @@ size proves electrical suitability is not.
 
 ```text
 src/kicad_terrarium/
-  cli.py                  Typer assembly and global output options only
+  cli.py                  Typer assembly and global terminal options only
   presentation.py         botanical palette, NO_COLOR, restrained statuses
   commands/
     common.py              output/config/project/error boundaries
     inspect.py             scan, audit, verify
-    transfer.py            list, pluck, sprout, seal, prune, graft
+    transfer.py            list, pluck, sprout, seal
     setup.py               init and fit
     browser.py             curses view/search; no transfer logic
   core/
@@ -32,7 +32,7 @@ src/kicad_terrarium/
     sexpr.py               string-aware source-span scanner
     discover.py            placed symbols, sheets, exact footprint edits
     project.py             bounded sub-sheet graph traversal
-    extract.py             verbatim definition copy/inheritance/merge/prune
+    extract.py             verbatim definition copy/inheritance/merge
     library.py             packed, unpacked, and nested-vault discovery
     tables.py              structural table parsing and span edits
     resolve.py             cross-platform KiCad table/path resolution
@@ -47,7 +47,7 @@ src/kicad_terrarium/
 
 Dependency direction is one-way: `cli` → `commands` → `core`. Core modules do
 not print, prompt, or depend on Typer/Rich/curses. Commands translate exceptions
-and domain results into human or JSON output.
+and domain results into concise human output.
 
 The command split is by workflow, not one tiny file per verb. Avoid rebuilding a
 single CLI wall, but also avoid fragmenting one operation across arbitrary
@@ -84,8 +84,8 @@ Rules:
   source; table-resolved folders are therefore treated as one library.
 - Ambiguous symbol search must ask for `--from-library`; discovery order must
   never select a winner silently.
-- `prune` maps files through table nicknames. Filename stems are not identity;
-  aliases are legal.
+- Pluck destinations are derived from the complete source path; every entry
+  point must preserve the same deterministic namespace.
 
 ## Sealing semantics
 
@@ -117,13 +117,10 @@ legacy shadows belong to one `OperationPlan`. An in-place migration therefore
 creates recovery backups for every changed schematic, table, and retired source
 and rolls back the complete set on failure.
 
-`seal --snapshot` copies the project to a sibling staging directory, applies
-the same namespaced seal, deep-verifies the copy, and only then atomically names
-the destination. The working project is never changed.
-
 KiCad 6+ embeds resolved symbol copies in schematics. `verify` deliberately
 checks the stronger, narrower promise that editable source libraries also
-travel. It does not yet certify footprint/model containment.
+travel. `audit` exposes physical handoff risks, but does not yet certify or
+create footprint/model containment.
 
 ## Mutation protocol
 
@@ -141,8 +138,6 @@ The plan owns:
 
 Dry-run output is rendered from the same plan that real execution applies. Do
 not add direct `Path.write_text`, `unlink`, or one-off `.bak` logic to commands.
-The snapshot staging directory is the one deliberate higher-level exception;
-it is isolated from the source and verified before publication.
 
 Mutating operations traverse sheets with `allow_external=False`. A project may
 legally reference an external sheet, but Terrarium must surface that boundary
@@ -229,8 +224,8 @@ The highest-value regression corpus includes:
 - directory/unpacked vaults and duplicate symbol ambiguity;
 - conflicting same-name definitions;
 - stale writes, lock files, path escapes, rollback, and unique backups;
-- end-to-end command and snapshot flows;
-- deterministic, changing ASCII renderer frames.
+- end-to-end command flows;
+- browser transfers preserving nested source identity.
 
 When available, validate generated libraries with the installed KiCad CLI as an
 additional integration authority:

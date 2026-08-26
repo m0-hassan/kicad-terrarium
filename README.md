@@ -31,19 +31,23 @@ Then, from a KiCad project:
 kt browse                 # browse/search visually, then select
 kt pluck SHT41            # or pull a known symbol directly from the vault
 kt fit --dry-run          # preview an explicit passive-footprint policy
-kt audit                  # layout-critical mechanical checks
 kt seal                   # pin sources under collision-free local nicknames
 kt verify                 # prove the used definitions are really present
+kt audit                  # expose remaining physical handoff risks
 ```
 
-For a professional handoff without changing your working copy:
+Before a professional handoff, preview the seal, apply it, and run both checks:
 
 ```bash
-kt seal --snapshot ../my-board-handoff
+kt seal --dry-run
+kt seal
+kt verify
+kt audit
 ```
 
-The snapshot is built separately, sealed, deeply verified, and only then moved
-into place. The original project is untouched.
+Then copy, archive, or commit the complete project folder with the ordinary tool
+you already trust for handoffs. Terrarium keeps project mutation focused; it
+does not duplicate general-purpose backup or copy tools.
 
 ## Why this exists
 
@@ -64,7 +68,7 @@ This is useful for:
 - engineers who repeatedly reuse custom parts across new projects;
 - teams reviewing or extending a design on another workstation;
 - client, manufacturing, classroom, or open-source handoffs;
-- archival snapshots where external library drift is unacceptable.
+- archival handoffs where external library drift is unacceptable.
 
 It is intentionally not a component downloader, electrical-rule oracle, or
 replacement for KiCad.
@@ -80,23 +84,19 @@ replacement for KiCad.
 | `sprout` | Promote one project symbol into the reusable vault |
 | `scan` | Show the libraries and exact symbols used by reachable sheets |
 | `fit` | Fill empty resistor/non-polar-C footprints using a named policy |
-| `audit` | Check assignments, files, pin/pad consistency, sheets, and models |
-| `seal` | Finalize all used symbol sources in place or into a snapshot |
+| `audit` | Expose physical handoff risks in assignments, footprints, pins/pads, sheets, and models |
+| `seal` | Finalize all used symbol sources inside the project |
 | `verify` | Verify local registrations, containment, files, definitions, and parents |
-| `prune` | Remove unused definitions using table nicknames, including aliases |
-| `graft` | Deliberately rename exact library references across project sheets |
 
-Every mutating command supports `--dry-run`. `--json` is available globally for
-automation:
+Every direct write command supports `--dry-run`. The interactive browser applies
+the selected `pluck` or `sprout` action immediately. Global terminal options go
+before the command:
 
 ```bash
-kt --json scan --precise
-kt --json verify
 kt --color never audit
+kt --theme light browse
 kt --version
 ```
-
-Global options go before the command.
 
 Project traversal visits each reachable schematic file once. Scan/audit counts
 are therefore source placements, not expanded counts for a sheet instantiated
@@ -128,11 +128,10 @@ name exists in several sub-libraries, Terrarium refuses to guess:
 kt pluck SharedPart --from-library sensors/environmental
 ```
 
-By default, a plucked source such as `sensors/environmental` is registered under
-the project nickname `Terrarium__sensors__environmental`. This avoids masking a
-global library with the same name while keeping nested source identities
-distinct. Use `--as` only when you deliberately want another exact destination
-nickname.
+A plucked source such as `sensors/environmental` is always registered under the
+project nickname `Terrarium__sensors__environmental`. This deterministic mapping
+avoids masking a global library with the same name while keeping nested source
+identities distinct.
 
 To sprout into a nested vault library:
 
@@ -173,11 +172,13 @@ changed schematic/table receive adjacent `.bak`, `.bak.1`, … recovery copies.
 - every required inheritance parent is present;
 - unpacked directory libraries contain no conflicting definitions.
 
-The narrower claim matters: this verifies **symbol-source completeness**. Until
-footprint/model sealing lands, `audit` may still report external physical assets.
-If an original symbol source is already gone, `seal` fails rather than silently
-presenting the schematic's embedded display cache as provenance-equivalent
-source.
+The narrower claim matters: `verify` proves **symbol-source completeness**.
+`audit` probes the physical side of the handoff—assignments, available footprint
+files, pin/pad agreement, 3D-model paths, and sheet reachability—but does not copy
+those assets. Until footprint/model sealing exists, a clean audit is supporting
+evidence rather than a proof that every physical asset is project-contained. If
+an original symbol source is already gone, `seal` fails rather than silently
+presenting the schematic's embedded display cache as provenance-equivalent source.
 
 ### Why the namespace is worth having
 
@@ -190,7 +191,7 @@ installed catalog remains available for continued design work.
 Terrarium creates at most one managed library per logical source, never one
 per symbol or invocation. It copies only the used dependency closure rather
 than mirroring complete KiCad libraries. The vault remains the reusable source;
-the project copy is a deliberate pinned snapshot.
+the project copy is a deliberate pinned dependency.
 
 ### Migrating an older Terrarium project
 

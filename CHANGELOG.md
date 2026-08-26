@@ -15,20 +15,23 @@ overstated the project's readiness; versioning now reflects its real maturity.
   KiCad unpacked `.kicad_symdir` discovery.
 - Added duplicate-symbol disambiguation by nickname or full nested path with
   `--from-library`, plus sprout targets such as `--library sensors/environmental`.
-- Defined `seal` as project finalization and added `seal --snapshot` for a
-  separately copied, sealed, deeply verified handoff.
+- Defined `seal` as focused, in-place project finalization; copying and archiving
+  remain the responsibility of normal filesystem or version-control tools.
 - Replaced pruned same-nickname shadows with namespaced project dependencies
   such as `Terrarium__Connector`, so the complete global KiCad library remains
   searchable while used project symbols resolve from portable local sources.
-- Made `pluck` default to a visible `Terrarium__<source>` workbench library;
-  explicit `--as` nicknames remain available when intentional.
+- Made every `pluck` entry point preserve the complete source identity and map it
+  deterministically to a visible `Terrarium__<source>` workbench library.
+- Removed the prototype `prune` and `graft` commands: sealing already minimizes
+  managed dependencies, while destructive cleanup and arbitrary renaming do not
+  belong in the compact core workflow.
 
 ### Reliability and correctness
 
 - Replaced indentation-sensitive schematic discovery and regex table parsing
   with a string-aware S-expression source-span scanner.
-- `graft` now edits only actual `lib_id` and cached-symbol identifiers; matching
-  descriptions and values are untouched.
+- Namespaced sealing edits only actual `lib_id` and cached-symbol identifiers;
+  matching descriptions and values are untouched.
 - Added deep verification of registration uniqueness, project containment,
   source existence, exact used definitions, inheritance parents, and unpacked
   directory conflicts.
@@ -43,8 +46,6 @@ overstated the project's readiness; versioning now reflects its real maturity.
 - Added explicit diagnostics for missing paths, unresolved variables, malformed
   tables, and unsupported DB/HTTP/foreign sources.
 - Made same-name, different-definition merges hard conflicts.
-- Fixed prune identity: registered nicknames, not filenames, determine symbol
-  usage, so aliases no longer delete live libraries.
 - Validated library nicknames and nested vault paths to prevent output escape.
 - Refused mutating traversal through external sub-sheets.
 
@@ -58,9 +59,6 @@ overstated the project's readiness; versioning now reflects its real maturity.
 - Dry-run uses the same plan as real execution.
 - Missing definitions abort a seal before any empty library or partial table is
   written.
-- Snapshot copies preserve symlinks instead of following them into unrelated
-  directories, and snapshot dry-runs now preflight both sealing and destination
-  safety.
 - Added automatic migration for legacy libraries explicitly identified as
   Terrarium-managed. Library creation, exact reference rewrites, table changes,
   and old-shadow retirement are one rollback-safe operation with adjacent
@@ -86,8 +84,8 @@ overstated the project's readiness; versioning now reflects its real maturity.
 
 - Split the previous 973-line `cli.py` into cohesive inspect, transfer, setup,
   browser, presentation, and workflow layers.
-- Added `--version`, `--json`, `--color auto|always|never`, `NO_COLOR`,
-  and `--theme auto|dark|light`.
+- Added `--version`, `--color auto|always|never`, `NO_COLOR`, and
+  `--theme auto|dark|light`.
 - Replaced bright check/cross ornament with restrained semantic status labels.
 - Replaced the sunset banner with adaptive botanical gradients for dark and
   light/beige terminal backgrounds.
@@ -99,9 +97,9 @@ overstated the project's readiness; versioning now reflects its real maturity.
   and diagnostics.
 - Enabled strict mypy, Python 3.10 targeting, typed-package metadata, branch
   coverage, a 75% CI floor, distribution builds, and `twine check`.
-- Expanded the suite from 74 to 164 tests, including adversarial source formats,
+- Expanded the suite from 74 to 147 tests, including adversarial source formats,
   deep verification, library ambiguity, path escapes, lock/stale-write checks,
-  rollback, snapshots, and CLI JSON.
+  rollback, and nested browser transfers.
 - Updated CI to test Python 3.10, 3.12, and 3.14 with pip caching, read-only
   permissions, concurrency cancellation, and packaging validation.
 

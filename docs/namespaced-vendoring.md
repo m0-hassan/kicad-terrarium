@@ -52,7 +52,7 @@ The reusable vault and project copy have different jobs:
 
 ```text
 vault                         project terrarium
-authoritative reusable work  pinned, portable dependency snapshot
+authoritative reusable work  pinned, portable dependency copy
 ```
 
 - `pluck` copies a selected vault definition into `Terrarium__<source>`.
