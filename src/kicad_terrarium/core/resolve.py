@@ -1,97 +1,302 @@
-"""Locate the library files behind every library name a project can see.
+"""Resolve KiCad project/global library tables on macOS, Linux, and Windows."""
 
-Two tables matter, project first (its entries shadow global ones — the same
-lookup order KiCad uses):
+from __future__ import annotations
 
-1. `<project>/sym-lib-table` (or `fp-lib-table` for footprints)
-2. the newest global table, e.g. `~/Library/Preferences/kicad/10.0/sym-lib-table`
-
-KiCad 10 adds one indirection: a global entry with `(type "Table")` whose uri
-is *another* lib table (the stock one shipped with the app). One level of
-recursion follows it.
-"""
-
+import json
+import os
 import re
+import sys
 from pathlib import Path
 
-_LIB_ENTRY = re.compile(r'\(lib\s*\(name "([^"]+)"\)\s*\(type "([^"]+)"\)\s*.*?\(uri "([^"]+)"\)')
-_KICAD_SYMBOL_VAR = re.compile(r"\$\{KICAD\d+_SYMBOL_DIR\}")
-_KICAD_FOOTPRINT_VAR = re.compile(r"\$\{KICAD\d+_FOOTPRINT_DIR\}")
+from kicad_terrarium.core.models import Diagnostic, ResolutionResult, ResolvedLibrary
+from kicad_terrarium.core.tables import parse_library_entries
+
+_VARIABLE = re.compile(r"\$\{([^}]+)\}")
+_VERSIONED_DIR = re.compile(r"KICAD\d+_(SYMBOL|FOOTPRINT|3DMODEL|TEMPLATE)_DIR")
+
+
+def default_config_dir() -> Path:
+    """The platform's KiCad per-user configuration root."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library/Preferences/kicad"
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA") or Path.home() / "AppData/Roaming") / "kicad"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "kicad"
+
+
+def default_share_dir() -> Path:
+    """Best platform fallback for KiCad's shared data root."""
+    if sys.platform == "darwin":
+        return Path("/Applications/KiCad/KiCad.app/Contents/SharedSupport")
+    if sys.platform == "win32":
+        return Path(os.environ.get("ProgramFiles") or "C:/Program Files") / "KiCad/share/kicad"
+    return Path("/usr/share/kicad")
+
 
 MAC_SHARE = Path("/Applications/KiCad/KiCad.app/Contents/SharedSupport")
 MAC_CONFIG = Path.home() / "Library/Preferences/kicad"
+DEFAULT_SHARE = default_share_dir()
+DEFAULT_CONFIG = default_config_dir()
 
 
 def parse_lib_table(table_text: str) -> list[tuple[str, str, str]]:
-    """(name, type, uri) rows from one table, tolerant of both KiCad 9's
-    `(name "x")(type ...)` spacing and KiCad 10's `(name "x") (type ...)`."""
-    return _LIB_ENTRY.findall(table_text)
+    """Compatibility view of parsed table rows as ``(name, type, uri)``."""
+    stripped = table_text.strip()
+    wrapped = f"(sym_lib_table {stripped})" if stripped.startswith("(lib") else table_text
+    return [
+        (entry.nickname, entry.library_type, entry.uri) for entry in parse_library_entries(wrapped)
+    ]
 
 
-def expand_uri(uri: str, project_dir: Path, share_dir: Path = MAC_SHARE) -> Path:
-    """Substitute the KiCad path variables terrarium understands."""
-    uri = uri.replace("${KIPRJMOD}", str(project_dir))
-    uri = _KICAD_SYMBOL_VAR.sub(str(share_dir / "symbols"), uri)
-    uri = _KICAD_FOOTPRINT_VAR.sub(str(share_dir / "footprints"), uri)
-    return Path(uri)
+def _builtin_value(name: str, share_dir: Path) -> str | None:
+    match = _VERSIONED_DIR.fullmatch(name)
+    if match is None:
+        return None
+    folder = {
+        "SYMBOL": "symbols",
+        "FOOTPRINT": "footprints",
+        "3DMODEL": "3dmodels",
+        "TEMPLATE": "template",
+    }[match.group(1)]
+    return str(share_dir / folder)
 
 
-def newest_global_table(table_name: str, config_dir: Path = MAC_CONFIG) -> Path | None:
-    """The highest-versioned KiCad config dir's table of that name, if any."""
+def expand_uri(
+    uri: str,
+    project_dir: Path,
+    share_dir: Path = DEFAULT_SHARE,
+    *,
+    variables: dict[str, str] | None = None,
+    base_dir: Path | None = None,
+) -> Path:
+    """Expand KiCad/environment path variables and relative table URIs."""
+    values = dict(os.environ)
+    if variables:
+        values.update(variables)
+    values["KIPRJMOD"] = str(project_dir)
 
-    def version_key(p: Path) -> float:
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        return values.get(name) or _builtin_value(name, share_dir) or match.group(0)
+
+    expanded_uri = uri
+    seen: set[str] = set()
+    for _iteration in range(10):
+        if expanded_uri in seen:
+            break
+        seen.add(expanded_uri)
+        substituted = _VARIABLE.sub(replace, expanded_uri)
+        if substituted == expanded_uri:
+            break
+        expanded_uri = substituted
+    expanded = Path(expanded_uri).expanduser()
+    if not expanded.is_absolute() and not _VARIABLE.search(str(expanded)):
+        expanded = (base_dir or project_dir) / expanded
+    return expanded
+
+
+def newest_global_table(table_name: str, config_dir: Path = DEFAULT_CONFIG) -> Path | None:
+    """The newest versioned KiCad config table, comparing version tuples."""
+
+    def version_key(path: Path) -> tuple[int, ...]:
         try:
-            return float(p.parent.name)
+            return tuple(int(part) for part in path.parent.name.split("."))
         except ValueError:
-            return -1.0
+            return (-1,)
 
-    tables = [p for p in config_dir.glob(f"*/{table_name}") if p.is_file()]
+    tables = [path for path in config_dir.glob(f"*/{table_name}") if path.is_file()]
     return max(tables, key=version_key) if tables else None
 
 
+def _config_variables(table_path: Path | None) -> dict[str, str]:
+    """Read KiCad's user-defined path variables from ``kicad_common.json``."""
+    if table_path is None:
+        return {}
+    common = table_path.parent / "kicad_common.json"
+    if not common.is_file():
+        return {}
+    try:
+        raw = json.loads(common.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    environment = raw.get("environment", {})
+    values = environment.get("vars", {}) if isinstance(environment, dict) else {}
+    if not isinstance(values, dict):
+        return {}
+    return {str(key): str(value) for key, value in values.items()}
+
+
 def _resolve(
-    project_dir: Path, table_name: str, share_dir: Path, config_dir: Path
-) -> dict[str, Path]:
-    """{library name: existing path}, project entries winning; missing dropped.
+    project_dir: Path,
+    table_name: str,
+    share_dir: Path,
+    config_dir: Path,
+    *,
+    include_project: bool = True,
+) -> ResolutionResult:
+    result = ResolutionResult()
+    global_table = newest_global_table(table_name, config_dir)
+    variables = _config_variables(global_table)
+    seen_tables: set[Path] = set()
 
-    Reporting an entry as unresolvable beats crashing on a half-installed
-    library set, so entries whose path does not exist are simply omitted.
-    """
+    def diagnostic(level: str, message: str, path: Path | None, code: str) -> None:
+        # Literal is narrowed by this small checked boundary.
+        if level == "error":
+            result.diagnostics.append(Diagnostic("error", message, path, code))
+        elif level == "warning":
+            result.diagnostics.append(Diagnostic("warning", message, path, code))
+        else:
+            result.diagnostics.append(Diagnostic("info", message, path, code))
 
-    def load(table_path: Path, depth: int) -> dict[str, Path]:
-        found: dict[str, Path] = {}
-        for name, lib_type, uri in parse_lib_table(table_path.read_text()):
-            path = expand_uri(uri, project_dir, share_dir)
-            if lib_type == "Table":
-                if depth < 2 and path.is_file():
-                    found.update(load(path, depth + 1))
-            elif path.exists():
-                found[name] = path
+    def load(
+        table_path: Path, *, project_scope: bool, nested: bool = False
+    ) -> dict[str, ResolvedLibrary]:
+        canonical = table_path.resolve()
+        if canonical in seen_tables:
+            diagnostic(
+                "warning",
+                f"library-table cycle ignored: {table_path}",
+                table_path,
+                "table-cycle",
+            )
+            return {}
+        seen_tables.add(canonical)
+        try:
+            text = table_path.read_text(encoding="utf-8")
+            entries = parse_library_entries(
+                text,
+                scope="project" if project_scope else ("nested" if nested else "global"),
+                table_path=table_path,
+            )
+        except (OSError, ValueError) as error:
+            diagnostic("error", f"cannot read library table: {error}", table_path, "invalid-table")
+            return {}
+
+        found: dict[str, ResolvedLibrary] = {}
+        for entry in entries:
+            if not entry.enabled:
+                continue
+            expanded = expand_uri(
+                entry.uri,
+                project_dir,
+                share_dir,
+                variables=variables,
+                base_dir=table_path.parent,
+            )
+            unresolved = _VARIABLE.findall(str(expanded))
+            if entry.library_type.casefold() == "table":
+                if unresolved:
+                    diagnostic(
+                        "warning",
+                        f"{entry.nickname}: unresolved path variable(s): {', '.join(unresolved)}",
+                        table_path,
+                        "unresolved-variable",
+                    )
+                elif expanded.is_file():
+                    found.update(load(expanded, project_scope=project_scope, nested=True))
+                else:
+                    diagnostic(
+                        "warning",
+                        f"nested table does not exist: {expanded}",
+                        expanded,
+                        "missing-table",
+                    )
+                continue
+
+            # A closer-scope entry owns its nickname even when broken. This is
+            # KiCad's shadowing behavior and prevents a global fallback from
+            # concealing a dangling project registration.
+            found.pop(entry.nickname, None)
+            if unresolved:
+                diagnostic(
+                    "warning",
+                    f"{entry.nickname}: unresolved path variable(s): {', '.join(unresolved)}",
+                    table_path,
+                    "unresolved-variable",
+                )
+                continue
+            if entry.library_type.casefold() != "kicad":
+                diagnostic(
+                    "warning",
+                    f"{entry.nickname}: library type {entry.library_type!r} "
+                    "is not file-backed by Terrarium",
+                    table_path,
+                    "unsupported-library-type",
+                )
+                continue
+            if not expanded.exists():
+                diagnostic(
+                    "warning",
+                    f"{entry.nickname}: path does not exist: {expanded}",
+                    expanded,
+                    "missing-library",
+                )
+                continue
+            found[entry.nickname] = ResolvedLibrary(entry, expanded)
         return found
 
-    result: dict[str, Path] = {}
-    global_table = newest_global_table(table_name, config_dir)
     if global_table is not None:
-        result.update(load(global_table, 0))
+        result.libraries.update(load(global_table, project_scope=False))
     project_table = project_dir / table_name
-    if project_table.is_file():
-        result.update(load(project_table, 0))
+    if include_project and project_table.is_file():
+        # Project nicknames shadow globals, including broken registrations.
+        try:
+            project_entries = parse_library_entries(
+                project_table.read_text(encoding="utf-8"),
+                scope="project",
+                table_path=project_table,
+            )
+            for entry in project_entries:
+                result.libraries.pop(entry.nickname, None)
+        except (OSError, ValueError):
+            pass
+        result.libraries.update(load(project_table, project_scope=True))
     return result
+
+
+def resolve_library_details(
+    project_dir: Path,
+    *,
+    table_name: str = "sym-lib-table",
+    share_dir: Path = DEFAULT_SHARE,
+    config_dir: Path = DEFAULT_CONFIG,
+) -> ResolutionResult:
+    """Detailed resolution with diagnostics for every unavailable entry."""
+    return _resolve(project_dir, table_name, share_dir, config_dir)
+
+
+def resolve_global_library_details(
+    project_dir: Path,
+    *,
+    table_name: str = "sym-lib-table",
+    share_dir: Path = DEFAULT_SHARE,
+    config_dir: Path = DEFAULT_CONFIG,
+) -> ResolutionResult:
+    """Resolve only the user/global table, ignoring project-level shadows."""
+    return _resolve(
+        project_dir,
+        table_name,
+        share_dir,
+        config_dir,
+        include_project=False,
+    )
 
 
 def resolve_libraries(
     project_dir: Path,
-    share_dir: Path = MAC_SHARE,
-    config_dir: Path = MAC_CONFIG,
+    share_dir: Path = DEFAULT_SHARE,
+    config_dir: Path = DEFAULT_CONFIG,
 ) -> dict[str, Path]:
-    """{symbol library name: .kicad_sym path} for everything resolvable."""
-    return _resolve(project_dir, "sym-lib-table", share_dir, config_dir)
+    """Compatibility mapping of resolvable symbol nicknames to paths."""
+    details = _resolve(project_dir, "sym-lib-table", share_dir, config_dir)
+    return {name: library.path for name, library in details.libraries.items()}
 
 
 def resolve_footprint_libs(
     project_dir: Path,
-    share_dir: Path = MAC_SHARE,
-    config_dir: Path = MAC_CONFIG,
+    share_dir: Path = DEFAULT_SHARE,
+    config_dir: Path = DEFAULT_CONFIG,
 ) -> dict[str, Path]:
-    """{footprint library name: .pretty directory} for everything resolvable."""
-    return _resolve(project_dir, "fp-lib-table", share_dir, config_dir)
+    """Compatibility mapping of resolvable footprint nicknames to paths."""
+    details = _resolve(project_dir, "fp-lib-table", share_dir, config_dir)
+    return {name: library.path for name, library in details.libraries.items()}

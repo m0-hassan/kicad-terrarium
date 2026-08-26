@@ -1,12 +1,17 @@
 from pathlib import Path
 
-from kicad_terrarium.core.project import project_lib_ids, project_schematics
+import pytest
+
+from kicad_terrarium.core.project import ProjectError, project_lib_ids, project_schematics
 
 # An in-memory "project": root -> sub-sheet -> back to root (a cycle).
 FAKE_SHEETS = {
-    Path("/proj/root.kicad_sch").resolve(): ('(property "Sheetfile" "sub/power.kicad_sch"'),
+    Path("/proj/root.kicad_sch").resolve(): (
+        '(kicad_sch (sheet (property "Sheetfile" "sub/power.kicad_sch")))'
+    ),
     Path("/proj/sub/power.kicad_sch").resolve(): (
-        '(lib_id "Device:R") (property "Sheetfile" "../root.kicad_sch"'
+        '(kicad_sch (symbol (lib_id "Device:R")) '
+        '(sheet (property "Sheetfile" "../root.kicad_sch")))'
     ),
 }
 
@@ -28,3 +33,8 @@ def test_walk_survives_reference_cycles():
 
 def test_project_lib_ids_aggregates_across_sheets():
     assert project_lib_ids(Path("/proj/root.kicad_sch"), read_text=fake_read) == ["Device:R"]
+
+
+def test_project_walk_rejects_a_non_schematic_document():
+    with pytest.raises(ProjectError, match="invalid schematic"):
+        project_schematics(Path("/proj/root.kicad_sch"), read_text=lambda _path: "(not_kicad)")
