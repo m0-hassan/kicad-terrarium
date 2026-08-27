@@ -25,6 +25,12 @@ overstated the project's readiness; versioning now reflects its real maturity.
 - Removed the prototype `prune` and `graft` commands: sealing already minimizes
   managed dependencies, while destructive cleanup and arbitrary renaming do not
   belong in the compact core workflow.
+- Completed the physical half of sealing: used footprint sources now receive the
+  same collision-free project namespace, while schematic assignments, board
+  links, and `fp-lib-table` registrations move together.
+- Added custom 3D-model containment. External models move to deterministic
+  project paths; project-contained, embedded, and standard KiCad models retain
+  their appropriate references.
 
 ### Reliability and correctness
 
@@ -79,6 +85,13 @@ overstated the project's readiness; versioning now reflects its real maturity.
   on-board/DNP state, reports missing cached pin data, checks only used footprint
   models, verifies `${KIPRJMOD}` model existence, and discovers orphan sheets
   recursively.
+- Audit now distinguishes project-contained footprint sources from personal or
+  global sources, treats non-traveling custom model paths as errors, and checks
+  model references embedded in the matching board.
+- Verify now proves footprint definitions and non-stock model containment in
+  addition to editable symbol-source completeness.
+- Audit warnings remain visible but no longer masquerade as fatal errors; only
+  error-level findings produce a failing exit status.
 
 ### CLI and terminal design
 
@@ -89,6 +102,7 @@ overstated the project's readiness; versioning now reflects its real maturity.
 - Replaced bright check/cross ornament with restrained semantic status labels.
 - Replaced the sunset banner with adaptive botanical gradients for dark and
   light/beige terminal backgrounds.
+- Embedded the fixed banner directly and removed the runtime `pyfiglet` dependency.
 - Added `/` search to the interactive browser.
 
 ### Engineering
@@ -97,11 +111,12 @@ overstated the project's readiness; versioning now reflects its real maturity.
   and diagnostics.
 - Enabled strict mypy, Python 3.10 targeting, typed-package metadata, branch
   coverage, a 75% CI floor, distribution builds, and `twine check`.
-- Expanded the suite from 74 to 147 tests, including adversarial source formats,
+- Expanded the suite from 74 to 160 tests, including adversarial source formats,
   deep verification, library ambiguity, path escapes, lock/stale-write checks,
   rollback, and nested browser transfers.
 - Updated CI to test Python 3.10, 3.12, and 3.14 with pip caching, read-only
   permissions, concurrency cancellation, and packaging validation.
+- Added a macOS CI gate and narrowed advertised platform support to macOS and Linux.
 
 ## 0.1.0 — 2026-08
 

@@ -8,7 +8,8 @@ implementation boundaries that should survive future work.
 Terrarium has two equally important jobs:
 
 1. make custom-symbol reuse dramatically faster than KiCad's library GUI path;
-2. make professional handoffs source-complete and self-contained.
+2. make professional handoffs source-complete and self-contained across symbols,
+   footprints, and custom 3D assets.
 
 The governing principle is: **automate declared mechanics; expose engineering
 judgment.** Copying an exact symbol block is mechanics. Applying a named fit
@@ -31,6 +32,7 @@ src/kicad_terrarium/
     models.py              precise shared domain records
     sexpr.py               string-aware source-span scanner
     discover.py            placed symbols, sheets, exact footprint edits
+    footprints.py          board links and exact model/footprint URI edits
     project.py             bounded sub-sheet graph traversal
     extract.py             verbatim definition copy/inheritance/merge
     library.py             packed, unpacked, and nested-vault discovery
@@ -38,6 +40,8 @@ src/kicad_terrarium/
     resolve.py             cross-platform KiCad table/path resolution
     verify.py              deep source-completeness proof
     audit.py               footprint/pad/model primitives
+    managed.py             shared Terrarium namespaces and provenance
+    physical.py            footprint/model half of the seal plan
     sizing.py              validated named R/C assignment policy
     io.py                  atomic plans, backups, locks, rollback
     workflows.py           complete preflighted mutation plans
@@ -89,8 +93,8 @@ Rules:
 
 ## Sealing semantics
 
-`seal` is in-place project finalization, not a magical proof of every KiCad
-asset and not a mandatory pre-commit ritual.
+`seal` is in-place project finalization, not a substitute for ERC/DRC and not a
+mandatory pre-commit ritual.
 
 Default sealing uses namespaced project-local dependencies:
 
@@ -112,15 +116,30 @@ There is at most one managed output library per logical source. Never create
 one file per symbol. Multiple per-source files preserve collision domains and
 provenance without copying complete upstream catalogs.
 
+Footprint sealing mirrors those principles:
+
+- map external `Resistor_SMD` to `Terrarium__Resistor_SMD`;
+- copy only referenced `.kicad_mod` files into one managed `.pretty` directory;
+- rewrite exact schematic Footprint properties and matching board links;
+- preserve valid user-owned project-local footprint libraries;
+- keep the complete global footprint source unshadowed and searchable;
+- copy non-stock external model files to content-stable project paths;
+- leave project-contained, embedded, and standard KiCad model paths in place;
+- fail the complete plan if an assigned footprint or custom model is unavailable.
+
+The standard KiCad 3D-model catalog is an accepted installation dependency. Do
+not mirror it into projects. This is the physical equivalent of depending on
+KiCad itself, not on one engineer's private filesystem.
+
 The library write, table edit, reference rewrites, and retirement of recognized
 legacy shadows belong to one `OperationPlan`. An in-place migration therefore
 creates recovery backups for every changed schematic, table, and retired source
 and rolls back the complete set on failure.
 
-KiCad 6+ embeds resolved symbol copies in schematics. `verify` deliberately
-checks the stronger, narrower promise that editable source libraries also
-travel. `audit` exposes physical handoff risks, but does not yet certify or
-create footprint/model containment.
+KiCad 6+ embeds symbol copies in schematics and footprint geometry in boards.
+`verify` deliberately checks the stronger promise that editable symbol and
+footprint sources plus non-stock model files also travel. `audit` separately
+checks physical coherence such as assignments and pin/pad agreement.
 
 ## Mutation protocol
 
@@ -130,7 +149,7 @@ The plan owns:
 
 1. explicit filesystem boundaries;
 2. expected SHA-256 state for every destination;
-3. known KiCad project and symbol-library lock-file checks;
+3. known KiCad project and changed-asset lock-file checks;
 4. same-directory temporary staging and `fsync`;
 5. unique adjacent recovery backups;
 6. atomic `os.replace` commits;
@@ -151,7 +170,7 @@ instead of silently changing another project.
 - an explicit global-only view used to migrate a known shadow without
   pretending normal KiCad resolution falls through it;
 - nested `(type "Table")` indirection with cycle detection;
-- macOS, Linux/XDG, and Windows configuration roots;
+- macOS and Linux/XDG configuration roots (Windows is not currently supported);
 - `${KIPRJMOD}` and versioned KiCad symbol/footprint/model/template variables;
 - user variables from the newest `kicad_common.json`;
 - environment variables and table-relative paths;
@@ -207,8 +226,8 @@ Before merging:
 .venv/bin/twine check dist/*
 ```
 
-Mypy runs in strict mode. CI covers Python 3.10, 3.12, and 3.14 and builds the
-distribution on the newest interpreter.
+Mypy runs in strict mode. CI covers Python 3.10, 3.12, and 3.14 on Linux, adds a
+macOS 3.12 gate, and builds the distribution on the newest Linux interpreter.
 
 Tests should prefer real minimal S-expression fixtures over mocked call graphs.
 The highest-value regression corpus includes:
@@ -226,6 +245,10 @@ The highest-value regression corpus includes:
 - stale writes, lock files, path escapes, rollback, and unique backups;
 - end-to-end command flows;
 - browser transfers preserving nested source identity.
+- footprint source namespacing across schematic and board references;
+- project/global footprint provenance and missing definitions;
+- stock, project-contained, embedded, unresolved, and external model paths;
+- idempotent custom-model copying and board-only mechanical models.
 
 When available, validate generated libraries with the installed KiCad CLI as an
 additional integration authority:

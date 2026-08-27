@@ -5,15 +5,15 @@
 kicad-terrarium is a fast, local-first KiCad library workflow. It lets you find
 and add a custom symbol in a few keystrokes instead of fighting KiCad's library
 GUIs, then seal and audit the project so collaborators receive the same editable
-symbol sources you used.
+symbol sources, footprint sources, and custom 3D assets you used.
 
 The name is the product philosophy: a finished project should be a terrarium —
 self-contained, inspectable, and alive without depending on one engineer's
 machine.
 
-> Current status: **0.2 beta.** The symbol workflow is usable and deliberately
-> conservative. Footprint and 3D-model *auditing* exists; automatic footprint and
-> model vendoring does not yet.
+> Current status: **0.2 beta.** Symbol, footprint, and custom-model sealing is
+> implemented and deliberately conservative. The remaining beta work is broader
+> real-project and macOS/Linux validation before a stable 1.0 claim.
 
 ## The workflow
 
@@ -85,8 +85,8 @@ replacement for KiCad.
 | `scan` | Show the libraries and exact symbols used by reachable sheets |
 | `fit` | Fill empty resistor/non-polar-C footprints using a named policy |
 | `audit` | Expose physical handoff risks in assignments, footprints, pins/pads, sheets, and models |
-| `seal` | Finalize all used symbol sources inside the project |
-| `verify` | Verify local registrations, containment, files, definitions, and parents |
+| `seal` | Finalize used symbol/footprint sources and custom models inside the project |
+| `verify` | Prove local registrations, containment, definitions, footprints, and models |
 
 Every direct write command supports `--dry-run`. The interactive browser applies
 the selected `pluck` or `sprout` action immediately. Global terminal options go
@@ -144,10 +144,11 @@ The project side of `browse` indexes project-local source libraries. Run
 
 ## What `seal` guarantees
 
-`seal` reads every reachable schematic, resolves KiCad's project and global
-library tables, follows nested table entries, expands standard and user-defined
-KiCad path variables, and copies each used definition plus its transitive
-`extends` parents.
+`seal` reads every reachable schematic and the matching board, resolves KiCad's
+project and global symbol/footprint tables, follows nested table entries, and
+expands standard and user-defined KiCad path variables. It copies each used
+symbol definition plus its transitive `extends` parents and each used footprint
+source file.
 
 External sources receive deterministic project-local identities such as
 `Terrarium__Connector` and live under `library/terrarium/`. Terrarium rewrites
@@ -163,22 +164,42 @@ Terrarium-managed are migrated automatically. Their registrations and exact
 schematic references are replaced together, and the retired files plus every
 changed schematic/table receive adjacent `.bak`, `.bak.1`, … recovery copies.
 
-`verify` does not stop at “the nickname appears in `sym-lib-table`.” It checks:
+Footprints use the same collision-free rule. For example,
+`Resistor_SMD:R_0603_1608Metric` becomes
+`Terrarium__Resistor_SMD:R_0603_1608Metric`, backed by a pruned project library
+under `library/terrarium/footprints/`. Terrarium updates both schematic
+Footprint properties and matching board library links, while the complete global
+`Resistor_SMD` catalog remains searchable.
+
+Non-stock 3D files outside the project are copied under
+`library/terrarium/models/` and their exact model URI tokens become portable
+`${KIPRJMOD}` paths. Existing project-contained and `kicad-embed://` models stay
+in place. Standard `${KICAD*_3DMODEL_DIR}` and `${KISYS3DMOD}` references remain
+normal KiCad installation dependencies; mirroring the complete official model
+catalog would add substantial redundant bulk without removing a personal-machine
+dependency.
+
+`verify` does not stop at “the nickname appears in a library table.” It checks:
 
 - the entry is enabled, unique, and a supported KiCad source;
 - its URI is project-relative rather than machine-specific;
 - its path resolves inside the project and exists;
 - every used symbol definition is present;
 - every required inheritance parent is present;
-- unpacked directory libraries contain no conflicting definitions.
+- unpacked symbol libraries contain no conflicting definitions;
+- every used footprint has a project-contained `.kicad_mod` source;
+- schematic assignments and board links resolve through portable project entries;
+- every non-stock model is embedded or exists at a contained `${KIPRJMOD}` path.
 
-The narrower claim matters: `verify` proves **symbol-source completeness**.
-`audit` probes the physical side of the handoff—assignments, available footprint
-files, pin/pad agreement, 3D-model paths, and sheet reachability—but does not copy
-those assets. Until footprint/model sealing exists, a clean audit is supporting
-evidence rather than a proof that every physical asset is project-contained. If
-an original symbol source is already gone, `seal` fails rather than silently
-presenting the schematic's embedded display cache as provenance-equivalent source.
+`verify` proves source containment. `audit` asks a different question: whether
+the physical design is coherent. It checks missing assignments, footprint
+availability and provenance, pin/pad agreement, model paths, and sheet
+reachability. If any original symbol, footprint, or custom-model source is gone,
+`seal` fails before writing rather than presenting embedded display/board caches
+as provenance-equivalent editable sources.
+
+Audit errors return a failing exit status. Advisory findings such as an orphaned
+alternate sheet remain visible warnings but do not fail automation by themselves.
 
 ### Why the namespace is worth having
 
@@ -188,10 +209,11 @@ every global connector that was not copied. Namespacing avoids that false
 choice: current-design sources are portable and pinned, while the complete
 installed catalog remains available for continued design work.
 
-Terrarium creates at most one managed library per logical source, never one
-per symbol or invocation. It copies only the used dependency closure rather
-than mirroring complete KiCad libraries. The vault remains the reusable source;
-the project copy is a deliberate pinned dependency.
+Terrarium creates at most one managed symbol library and one managed `.pretty`
+directory per logical source, never one library per part or invocation. It copies
+only used definitions rather than mirroring complete KiCad libraries. The vault
+and global catalogs remain reusable sources; project copies are deliberate pinned
+dependencies.
 
 ### Migrating an older Terrarium project
 
@@ -223,7 +245,7 @@ Terrarium plans the complete operation before writing anything. A plan:
 - rejects paths outside its project/vault boundary;
 - rejects ambiguous symbols and conflicting same-name definitions;
 - refuses external sub-sheet mutation;
-- checks KiCad project and symbol-library lock files before writes;
+- checks known KiCad lock files for every project asset it will change;
 - hashes every destination and detects changes made after planning;
 - stages and fsyncs writes beside their destination;
 - uses atomic replacement and rolls back a partial commit;
@@ -284,6 +306,8 @@ Search with `/`; all underlying actions remain ordinary scriptable commands.
 
 ## Install and develop
 
+Supported platforms are macOS and Linux.
+
 Until a public package is published, install from a checkout:
 
 ```bash
@@ -315,8 +339,8 @@ central KiCad design decision.
 - no inductor sizing from value alone;
 - no schematic-wide consolidation as the default;
 - no database/HTTP/foreign-library extraction masquerading as supported;
-- no automatic footprint or 3D-model vendoring until their portability model is
-  implemented and tested end to end.
+- no mirroring of complete official KiCad libraries or standard 3D-model catalogs;
+- no promise that `audit` can replace KiCad ERC, DRC, or engineering review.
 
 ## License
 
