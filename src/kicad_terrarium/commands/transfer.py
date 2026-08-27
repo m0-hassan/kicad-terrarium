@@ -222,7 +222,7 @@ def seal(
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show the exact plan; write nothing."),
 ) -> None:
-    """Finalize the project so every used symbol source travels with it."""
+    """Finalize used symbol, footprint, and custom-model sources inside the project."""
     project = resolve_root(root)
     try:
         result = plan_seal(project)
@@ -237,22 +237,62 @@ def seal(
         fail(str(error), code=2)
     backup_count = sum(change.expected_digest is not None for change in result.plan.changes)
     changed = apply_plan(result.plan, dry_run=dry_run)
-    for library in result.libraries:
-        status = PLAN if dry_run and library.changed else (DONE if library.changed else UNCHANGED)
-        migrated = [source for source in library.sources if source != library.nickname]
-        label = f"{', '.join(migrated)} -> {library.nickname}" if migrated else library.nickname
+    for symbol_library in result.libraries:
+        status = (
+            PLAN
+            if dry_run and symbol_library.changed
+            else (DONE if symbol_library.changed else UNCHANGED)
+        )
+        migrated = [
+            source for source in symbol_library.sources if source != symbol_library.nickname
+        ]
+        label = (
+            f"{', '.join(migrated)} -> {symbol_library.nickname}"
+            if migrated
+            else symbol_library.nickname
+        )
         console().print(
             status_line(
                 status,
-                f"{label}: {library.used} used, {library.kept} definitions",
+                f"{label}: {symbol_library.used} used, {symbol_library.kept} definitions",
             )
         )
-    if not result.libraries:
-        console().print(status_line(UNCHANGED, "project uses no external symbol definitions"))
-    elif not dry_run:
-        console().print(
-            status_line(DONE if changed else UNCHANGED, "project symbol sources are sealed")
+    for footprint_library in result.footprint_libraries:
+        status = (
+            PLAN
+            if dry_run and footprint_library.changed
+            else (DONE if footprint_library.changed else UNCHANGED)
         )
+        migrated = [
+            source for source in footprint_library.sources if source != footprint_library.nickname
+        ]
+        label = (
+            f"{', '.join(migrated)} -> {footprint_library.nickname}"
+            if migrated
+            else footprint_library.nickname
+        )
+        console().print(
+            status_line(
+                status,
+                f"{label}: {footprint_library.used} used, {footprint_library.kept} footprints",
+            )
+        )
+    if result.model_files:
+        model_status = (
+            PLAN
+            if dry_run and result.changed_model_files
+            else (DONE if result.changed_model_files else UNCHANGED)
+        )
+        console().print(
+            status_line(
+                model_status,
+                f"{result.model_files} project-contained custom 3D model file(s)",
+            )
+        )
+    if not result.libraries and not result.footprint_libraries and not result.model_files:
+        console().print(status_line(UNCHANGED, "project uses no external library definitions"))
+    elif not dry_run:
+        console().print(status_line(DONE if changed else UNCHANGED, "project sources are sealed"))
         if backup_count:
             console().print(status_line(DONE, f"{backup_count} adjacent recovery backups created"))
 

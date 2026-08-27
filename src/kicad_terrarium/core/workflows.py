@@ -19,11 +19,19 @@ from kicad_terrarium.core.extract import (
 )
 from kicad_terrarium.core.io import OperationPlan, read_utf8
 from kicad_terrarium.core.library import LibrarySource, SymbolSource, source_blocks, source_version
-from kicad_terrarium.core.models import LibraryEntry, SymbolId
+from kicad_terrarium.core.managed import (
+    TERRARIUM_LIBRARY_DIRECTORY,
+    TERRARIUM_LIBRARY_PREFIX,
+    is_terrarium_managed,
+    managed_description,
+    terrarium_library_nickname,
+)
+from kicad_terrarium.core.models import SymbolId
+from kicad_terrarium.core.physical import FootprintSealLibraryResult, extend_seal_plan
 from kicad_terrarium.core.project import project_lib_ids, project_schematics
 from kicad_terrarium.core.repoint import repoint_libraries
 from kicad_terrarium.core.resolve import (
-    expand_uri,
+    direct_library_registration,
     resolve_global_library_details,
     resolve_library_details,
 )
@@ -34,8 +42,6 @@ from kicad_terrarium.core.sizing import (
     footprint_for,
 )
 from kicad_terrarium.core.tables import (
-    MANAGED_DESCRIPTION,
-    parse_library_entries,
     portable_project_uri,
     remove_from_sym_lib_table,
     upsert_sym_lib_uris,
@@ -45,40 +51,6 @@ from kicad_terrarium.core.tables import (
 
 class WorkflowError(ValueError):
     """A complete operation cannot be planned without risking bad output."""
-
-
-TERRARIUM_LIBRARY_PREFIX = "Terrarium__"
-TERRARIUM_LIBRARY_DIRECTORY = Path("library/terrarium")
-_LEGACY_MANAGED_DESCRIPTIONS = (
-    MANAGED_DESCRIPTION.casefold(),
-    "vendored by kicad-terrarium",
-)
-
-
-def terrarium_library_nickname(
-    source_nickname: str,
-    group: tuple[str, ...] = (),
-) -> str:
-    """The deterministic project-local identity for one external source."""
-    components = (*group, source_nickname)
-    for component in components:
-        validate_library_nickname(component)
-    return validate_library_nickname(TERRARIUM_LIBRARY_PREFIX + "__".join(components))
-
-
-def _managed_description(mode: str, sources: set[str] | list[str]) -> str:
-    origin = ", ".join(sorted(sources))
-    return f"{MANAGED_DESCRIPTION}; mode={mode}; source={origin}"
-
-
-def _is_terrarium_managed(entry: LibraryEntry | None) -> bool:
-    if entry is None:
-        return False
-    description = entry.description.casefold()
-    return any(
-        description == prefix or description.startswith(prefix + ";")
-        for prefix in _LEGACY_MANAGED_DESCRIPTIONS
-    )
 
 
 @dataclass
@@ -101,6 +73,9 @@ class SealLibraryResult:
 class SealResult:
     plan: OperationPlan
     libraries: list[SealLibraryResult] = field(default_factory=list)
+    footprint_libraries: list[FootprintSealLibraryResult] = field(default_factory=list)
+    model_files: int = 0
+    changed_model_files: int = 0
 
 
 @dataclass
@@ -138,24 +113,6 @@ def _validate_project_ids(values: list[str]) -> None:
             raise WorkflowError(str(error)) from error
 
 
-def _registration(project_dir: Path, nickname: str) -> tuple[LibraryEntry, Path] | None:
-    table = project_dir / "sym-lib-table"
-    if not table.is_file():
-        return None
-    entries = [
-        entry
-        for entry in parse_library_entries(read_utf8(table))
-        if entry.enabled and entry.nickname == nickname
-    ]
-    if len(entries) > 1:
-        raise WorkflowError(f"{nickname!r} is registered more than once in {table}")
-    if not entries:
-        return None
-    entry = entries[0]
-    path = expand_uri(entry.uri, project_dir, base_dir=table.parent).resolve()
-    return entry, path
-
-
 def _project_plan(root: Path) -> OperationPlan:
     return OperationPlan(root.parent, protected_projects=(root,))
 
@@ -183,10 +140,10 @@ def plan_pluck(
         *source.library.group,
         f"{source.library.nickname}.kicad_sym",
     )
-    registration = _registration(project_dir, nickname)
+    registration = direct_library_registration(project_dir, nickname, table_name="sym-lib-table")
     registered_path = registration[1] if registration is not None else None
     if registration is not None and (
-        not _is_terrarium_managed(registration[0]) or registered_path != destination.resolve()
+        not is_terrarium_managed(registration[0]) or registered_path != destination.resolve()
     ):
         raise WorkflowError(
             f"reserved destination nickname {nickname!r} is not a Terrarium workbench library"
@@ -219,7 +176,7 @@ def plan_pluck(
     new_table = upsert_sym_lib_uris(
         table_text,
         {nickname: _project_uri(project_dir, destination)},
-        descriptions={nickname: _managed_description("workbench", [source.library.selector])},
+        descriptions={nickname: managed_description("workbench", [source.library.selector])},
     )
     plan = _project_plan(root)
     plan.write(destination, output, f"add {source.symbol} to {nickname}")
@@ -314,7 +271,9 @@ def plan_seal(root: Path) -> SealResult:
         wanted = used_symbols(all_ids, source_nickname)
         visible_source = visible.libraries.get(source_nickname)
         current_path = visible_source.path.resolve() if visible_source else None
-        direct_registration = _registration(project_dir, source_nickname)
+        direct_registration = direct_library_registration(
+            project_dir, source_nickname, table_name="sym-lib-table"
+        )
         source_entry = (
             direct_registration[0]
             if direct_registration is not None
@@ -323,7 +282,7 @@ def plan_seal(root: Path) -> SealResult:
         managed_local = (
             current_path is not None
             and current_path.is_relative_to(project_dir)
-            and _is_terrarium_managed(source_entry)
+            and is_terrarium_managed(source_entry)
         )
         direct_external_source = (
             direct_registration is not None
@@ -340,6 +299,14 @@ def plan_seal(root: Path) -> SealResult:
             and current_path.is_relative_to(project_dir)
             and not managed_local
         ):
+            if (
+                direct_registration is not None
+                and direct_registration[0].library_type.casefold() != "kicad"
+            ):
+                raise WorkflowError(
+                    f"{source_nickname}: direct project nickname is already used by "
+                    f"a {direct_registration[0].library_type!r} entry"
+                )
             blocks = source_blocks(_resolved_source(current_path, source_nickname))
             _ordered, missing = extends_closure(wanted, blocks)
             if missing:
@@ -380,13 +347,15 @@ def plan_seal(root: Path) -> SealResult:
         if final_nickname != source_nickname:
             rewritten[source_nickname] = final_nickname
 
-        target_registration = _registration(project_dir, final_nickname)
+        target_registration = direct_library_registration(
+            project_dir, final_nickname, table_name="sym-lib-table"
+        )
         target_entry = target_registration[0] if target_registration is not None else None
         target_path = target_registration[1] if target_registration is not None else None
         if target_registration is not None:
             target_entry, target_path = target_registration
             if (
-                not _is_terrarium_managed(target_entry)
+                not is_terrarium_managed(target_entry)
                 or target_entry.library_type.casefold() != "kicad"
                 or target_path is None
                 or not target_path.is_relative_to(project_dir)
@@ -438,7 +407,7 @@ def plan_seal(root: Path) -> SealResult:
                 ),
                 description=(
                     target_entry.description
-                    if target_entry is not None and _is_terrarium_managed(target_entry)
+                    if target_entry is not None and is_terrarium_managed(target_entry)
                     else ""
                 ),
             )
@@ -495,7 +464,7 @@ def plan_seal(root: Path) -> SealResult:
         before = group.destination.read_bytes() if group.destination.is_file() else None
         plan.write(group.destination, output, f"seal {group.nickname}")
         registrations[group.nickname] = _project_uri(project_dir, group.destination)
-        descriptions[group.nickname] = group.description or _managed_description(
+        descriptions[group.nickname] = group.description or managed_description(
             "sealed", group.sources
         )
         if group.hidden:
@@ -511,11 +480,10 @@ def plan_seal(root: Path) -> SealResult:
             )
         )
 
+    sheet_outputs: dict[Path, str] = {}
     for sheet in project_schematics(root, allow_external=False):
-        text = read_utf8(sheet)
-        output, counts = repoint_libraries(text, rewritten)
-        if any(counts.values()):
-            plan.write(sheet, output, "point symbols at namespaced Terrarium sources")
+        output, _counts = repoint_libraries(read_utf8(sheet), rewritten)
+        sheet_outputs[sheet] = output
 
     if remove_registrations or registrations:
         updated = table_text
@@ -532,7 +500,17 @@ def plan_seal(root: Path) -> SealResult:
     for legacy_path in sorted(delete_legacy_paths):
         plan.delete(legacy_path, "retire migrated Terrarium shadow")
 
-    return SealResult(plan, results)
+    physical = extend_seal_plan(root, plan, sheet_outputs)
+    for sheet, output in physical.sheets.items():
+        plan.write(sheet, output, "point project at namespaced Terrarium sources")
+
+    return SealResult(
+        plan,
+        results,
+        physical.libraries,
+        physical.model_files,
+        physical.changed_model_files,
+    )
 
 
 def plan_fit(root: Path, rules: Rules) -> FitResult:
