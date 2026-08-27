@@ -3,7 +3,9 @@ import pytest
 from kicad_terrarium.core.tables import (
     parse_library_entries,
     portable_project_uri,
+    remove_from_fp_lib_table,
     remove_from_sym_lib_table,
+    upsert_fp_lib_uris,
     upsert_sym_lib_uris,
     validate_library_nickname,
 )
@@ -66,6 +68,20 @@ def test_upsert_can_hide_a_loaded_dependency_and_preserve_provenance():
     assert entry.hidden is True
     assert entry.enabled is True
     assert entry.description.endswith("source=Device")
+
+
+def test_footprint_table_edits_use_the_fp_root_and_portable_uris():
+    original = '(fp_lib_table (lib (name "Old")(type "KiCad")(uri "/tmp/old.pretty")))'
+    without_old = remove_from_fp_lib_table(original, ["Old"])
+    output = upsert_fp_lib_uris(
+        without_old,
+        {"Terrarium__Parts": "${KIPRJMOD}/library/terrarium/footprints/Parts.pretty"},
+        hidden_names={"Terrarium__Parts"},
+    )
+
+    [entry] = parse_library_entries(output)
+    assert entry.nickname == "Terrarium__Parts"
+    assert entry.hidden is True
 
 
 def test_portable_project_uri_rejects_machine_specific_locations():

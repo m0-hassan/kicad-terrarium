@@ -25,6 +25,31 @@ class SymbolId:
         return f"{self.library}:{self.name}"
 
 
+@dataclass(frozen=True, order=True)
+class FootprintId:
+    """A KiCad footprint's stable ``library:name`` identity."""
+
+    library: str
+    name: str
+
+    @classmethod
+    def parse(cls, value: str) -> FootprintId:
+        library, separator, name = value.partition(":")
+        if (
+            not separator
+            or not library
+            or not name
+            or name in {".", ".."}
+            or "/" in name
+            or "\\" in name
+        ):
+            raise ValueError(f"invalid footprint ID: {value!r}")
+        return cls(library, name)
+
+    def __str__(self) -> str:
+        return f"{self.library}:{self.name}"
+
+
 TableScope = Literal["project", "global", "nested"]
 
 

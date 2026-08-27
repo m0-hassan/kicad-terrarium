@@ -1,4 +1,4 @@
-"""Resolve KiCad project/global library tables on macOS, Linux, and Windows."""
+"""Resolve KiCad project/global library tables and path variables."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from pathlib import Path
 from kicad_terrarium.core.models import (
     Diagnostic,
     DiagnosticLevel,
+    LibraryEntry,
     ResolutionResult,
     ResolvedLibrary,
 )
@@ -118,6 +119,52 @@ def _config_variables(table_path: Path | None) -> dict[str, str]:
     if not isinstance(values, dict):
         return {}
     return {str(key): str(value) for key, value in values.items()}
+
+
+def configured_path_variables(
+    config_dir: Path = DEFAULT_CONFIG,
+    *,
+    table_name: str = "fp-lib-table",
+) -> dict[str, str]:
+    """User-defined KiCad path variables from the newest matching configuration."""
+    return _config_variables(newest_global_table(table_name, config_dir))
+
+
+def direct_library_registration(
+    project_dir: Path,
+    nickname: str,
+    *,
+    table_name: str,
+    share_dir: Path = DEFAULT_SHARE,
+    config_dir: Path = DEFAULT_CONFIG,
+) -> tuple[LibraryEntry, Path] | None:
+    """One enabled direct project-table row and its expanded path, if present."""
+    table = project_dir / table_name
+    if not table.is_file():
+        return None
+    entries = [
+        entry
+        for entry in parse_library_entries(table.read_bytes().decode("utf-8"))
+        if entry.enabled and entry.nickname == nickname
+    ]
+    if len(entries) > 1:
+        raise ValueError(f"{nickname!r} is registered more than once in {table}")
+    if not entries:
+        return None
+    entry = entries[0]
+    path = expand_uri(
+        entry.uri,
+        project_dir,
+        share_dir,
+        variables=configured_path_variables(config_dir, table_name=table_name),
+        base_dir=table.parent,
+    )
+    unresolved = _VARIABLE.findall(str(path))
+    if unresolved:
+        raise ValueError(
+            f"{nickname}: unresolved path variable(s): {', '.join(sorted(set(unresolved)))}"
+        )
+    return entry, path.resolve()
 
 
 def _resolve(

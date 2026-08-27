@@ -1,6 +1,8 @@
 from pathlib import Path
 
 from kicad_terrarium.core.resolve import (
+    configured_path_variables,
+    direct_library_registration,
     expand_uri,
     resolve_global_library_details,
     resolve_library_details,
@@ -90,6 +92,36 @@ def test_resolve_reads_custom_kicad_path_variables(tmp_path):
     )
     details = resolve_library_details(tmp_path / "project", config_dir=config)
     assert {name: item.path for name, item in details.libraries.items()} == {"Mine": source}
+    assert configured_path_variables(config, table_name="sym-lib-table") == {"MY_LIBS": str(custom)}
+
+
+def test_direct_registration_uses_custom_kicad_path_variables(tmp_path):
+    custom = tmp_path / "custom"
+    custom.mkdir()
+    source = custom / "Mine.pretty"
+    source.mkdir()
+    config = tmp_path / "config"
+    version = config / "10.0"
+    version.mkdir(parents=True)
+    (version / "kicad_common.json").write_text(
+        '{"environment":{"vars":{"MY_LIBS":"' + str(custom) + '"}}}'
+    )
+    (version / "fp-lib-table").write_text("(fp_lib_table)")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "fp-lib-table").write_text(
+        '(fp_lib_table (lib (name "Mine")(type "KiCad")(uri "${MY_LIBS}/Mine.pretty")))'
+    )
+
+    registration = direct_library_registration(
+        project,
+        "Mine",
+        table_name="fp-lib-table",
+        config_dir=config,
+    )
+
+    assert registration is not None
+    assert registration[1] == source
 
 
 def test_dangling_project_registration_does_not_fall_back_to_global(tmp_path):

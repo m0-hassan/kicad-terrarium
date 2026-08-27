@@ -16,6 +16,7 @@ from kicad_terrarium.core.sexpr import (
 )
 
 EMPTY_TABLE = "(sym_lib_table\n\t(version 7)\n)\n"
+EMPTY_FP_TABLE = "(fp_lib_table\n\t(version 7)\n)\n"
 MANAGED_DESCRIPTION = "Managed by kicad-terrarium"
 _SAFE_NICKNAME = re.compile(r'^[^<>:"/\\|?*\x00-\x1f]+$')
 _VARIABLE = re.compile(r"\$\{([^}]+)\}")
@@ -133,13 +134,12 @@ def table_entry_uri(
     )
 
 
-def remove_from_sym_lib_table(text: str, names: list[str]) -> str:
-    """Remove named entries by source span, including multiline entries."""
+def _remove_from_library_table(text: str, names: list[str], root_head: str) -> str:
     drop = set(names)
     all_forms = forms(text)
-    roots = [form for form in all_forms if form.depth == 0 and form.head == "sym_lib_table"]
+    roots = [form for form in all_forms if form.depth == 0 and form.head == root_head]
     if len(roots) != 1:
-        raise ValueError("invalid sym-lib-table")
+        raise ValueError(f"invalid {root_head.replace('_', '-')}")
     replacements: list[tuple[int, int, str]] = []
     for entry in child_forms(all_forms, roots[0], "lib"):
         nickname = _field_value(text, all_forms, entry, "name")
@@ -157,25 +157,36 @@ def remove_from_sym_lib_table(text: str, names: list[str]) -> str:
     return apply_replacements(text, replacements)
 
 
-def upsert_sym_lib_uris(
+def remove_from_sym_lib_table(text: str, names: list[str]) -> str:
+    """Remove named symbol entries by source span, including multiline entries."""
+    return _remove_from_library_table(text, names, "sym_lib_table")
+
+
+def remove_from_fp_lib_table(text: str, names: list[str]) -> str:
+    """Remove named footprint entries by source span, including multiline entries."""
+    return _remove_from_library_table(text, names, "fp_lib_table")
+
+
+def _upsert_library_uris(
     existing: str | None,
     entries: dict[str, str],
     *,
-    hidden_names: set[str] | frozenset[str] = frozenset(),
-    descriptions: dict[str, str] | None = None,
+    root_head: str,
+    empty_table: str,
+    hidden_names: set[str] | frozenset[str],
+    descriptions: dict[str, str] | None,
 ) -> str:
-    """Replace named direct registrations with explicit project-portable URIs."""
     nonportable = [name for name, uri in entries.items() if not portable_project_uri(uri)]
     if nonportable:
         raise ValueError(
             "project library URI is not portable for: " + ", ".join(sorted(nonportable))
         )
-    text = existing if existing is not None else EMPTY_TABLE
-    without_old = remove_from_sym_lib_table(text, list(entries))
+    text = existing if existing is not None else empty_table
+    without_old = _remove_from_library_table(text, list(entries), root_head)
     all_forms = forms(without_old)
-    roots = [form for form in all_forms if form.depth == 0 and form.head == "sym_lib_table"]
+    roots = [form for form in all_forms if form.depth == 0 and form.head == root_head]
     if len(roots) != 1:
-        raise ValueError("invalid sym-lib-table")
+        raise ValueError(f"invalid {root_head.replace('_', '-')}")
     root = roots[0]
     newline = "\r\n" if "\r\n" in without_old else "\n"
     descriptions = descriptions or {}
@@ -191,3 +202,39 @@ def upsert_sym_lib_uris(
     if root.start + 1 < root.end and not without_old[: root.end - 1].endswith(("\n", "\r")):
         insertion = newline + insertion
     return without_old[: root.end - 1] + insertion + without_old[root.end - 1 :]
+
+
+def upsert_sym_lib_uris(
+    existing: str | None,
+    entries: dict[str, str],
+    *,
+    hidden_names: set[str] | frozenset[str] = frozenset(),
+    descriptions: dict[str, str] | None = None,
+) -> str:
+    """Replace named direct registrations with explicit project-portable URIs."""
+    return _upsert_library_uris(
+        existing,
+        entries,
+        root_head="sym_lib_table",
+        empty_table=EMPTY_TABLE,
+        hidden_names=hidden_names,
+        descriptions=descriptions,
+    )
+
+
+def upsert_fp_lib_uris(
+    existing: str | None,
+    entries: dict[str, str],
+    *,
+    hidden_names: set[str] | frozenset[str] = frozenset(),
+    descriptions: dict[str, str] | None = None,
+) -> str:
+    """Replace named footprint registrations with portable project URIs."""
+    return _upsert_library_uris(
+        existing,
+        entries,
+        root_head="fp_lib_table",
+        empty_table=EMPTY_FP_TABLE,
+        hidden_names=hidden_names,
+        descriptions=descriptions,
+    )
