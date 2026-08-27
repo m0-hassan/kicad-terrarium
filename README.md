@@ -308,11 +308,15 @@ Search with `/`; all underlying actions remain ordinary scriptable commands.
 
 Supported platforms are macOS and Linux.
 
-Until a public package is published, install from a checkout:
+Install the current beta directly from its tagged GitHub release:
 
 ```bash
-pipx install .
-# or, for development
+pipx install "git+https://github.com/m0-hassan/kicad-terrarium.git@v0.2.0"
+```
+
+For development, install from a checkout:
+
+```bash
 python -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
 ```

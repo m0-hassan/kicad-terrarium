@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — 2026-08-26
+## 0.2.0 — 2026-08-27
 
 First release-candidate beta after the repository-wide product and engineering
 audit. The earlier in-repository `1.0.0` label was never published or tagged and
