@@ -17,7 +17,6 @@ classifiers = [
     "Environment :: Console :: Curses",
     "Intended Audience :: Developers",
     "Operating System :: MacOS",
-    "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
@@ -30,7 +29,6 @@ classifiers = [
 dependencies = [
     "typer>=0.16,<1",
     "rich>=13,<16",
-    "windows-curses>=2.4.2,<3; platform_system == 'Windows'",
 ]
 
 [project.urls]
