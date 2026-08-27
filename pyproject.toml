@@ -30,7 +30,6 @@ classifiers = [
 dependencies = [
     "typer>=0.16,<1",
     "rich>=13,<16",
-    "pyfiglet>=1.0.2,<2",
     "windows-curses>=2.4.2,<3; platform_system == 'Windows'",
 ]
 

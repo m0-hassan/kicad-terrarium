@@ -6,7 +6,6 @@ import os
 from dataclasses import dataclass
 from typing import Literal
 
-from pyfiglet import figlet_format
 from rich.console import Console
 from rich.text import Text
 
@@ -15,6 +14,14 @@ Theme = Literal["auto", "dark", "light"]
 
 DARK_PALETTE = ["#b7d88a", "#69b578", "#2f8f62"]
 LIGHT_PALETTE = ["#183d2b", "#2d6045", "#51734b"]
+BANNER_LINES = (
+    "   __                            _               ",
+    "  / /____  ______________ ______(_)_  ______ ___ ",
+    " / __/ _ \\/ ___/ ___/ __ `/ ___/ / / / / __ `__ \\",
+    "/ /_/  __/ /  / /  / /_/ / /  / / /_/ / / / / / /",
+    "\\__/\\___/_/  /_/   \\__,_/_/  /_/\\__,_/_/ /_/ /_/ ",
+    "                                                 ",
+)
 
 
 def detect_theme(requested: Theme = "auto") -> Literal["dark", "light"]:
@@ -71,10 +78,13 @@ def line_colors(num_lines: int, palette: list[str]) -> list[str]:
 
 def render_banner(theme: Theme = "auto") -> Text:
     """Render Terrarium's botanical gradient with a light-background variant."""
-    lines = figlet_format("terrarium", font="slant").rstrip("\n").split("\n")
     palette = LIGHT_PALETTE if detect_theme(theme) == "light" else DARK_PALETTE
     rendered = Text()
-    for line, color in zip(lines, line_colors(len(lines), palette), strict=True):
+    for line, color in zip(
+        BANNER_LINES,
+        line_colors(len(BANNER_LINES), palette),
+        strict=True,
+    ):
         rendered.append(line + "\n", style=color)
     return rendered
 
