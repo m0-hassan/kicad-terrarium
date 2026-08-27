@@ -2,7 +2,7 @@ from kicad_terrarium.core.discover import find_lib_ids, library_counts, sheet_fi
 
 
 def test_find_lib_ids_extracts_each_reference():
-    text = '(lib_id "Device:R") junk (lib_id "Device:C")'
+    text = '(kicad_sch (symbol (lib_id "Device:R")) (symbol (lib_id "Device:C")))'
     assert find_lib_ids(text) == ["Device:R", "Device:C"]
 
 

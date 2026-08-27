@@ -7,7 +7,6 @@ edits exact source spans, preserving every unknown field around them.
 
 from __future__ import annotations
 
-import re
 from collections import Counter
 from collections.abc import Callable
 
@@ -23,26 +22,18 @@ from kicad_terrarium.core.sexpr import (
     quoted_tokens,
 )
 
-_FRAGMENT_LIB_ID = re.compile(r'\(lib_id\s+"([^"\\]*(?:\\.[^"\\]*)*)"')
-_FRAGMENT_SHEETFILE = re.compile(r'\(property\s+"Sheetfile"\s+"([^"\\]*(?:\\.[^"\\]*)*)"')
-
 
 def _first_string(text: str, form: Form) -> str | None:
     tokens = quoted_tokens(text, form)
     return tokens[0].value if tokens else None
 
 
-def find_lib_ids(text: str, *, strict: bool = False) -> list[str]:
+def find_lib_ids(text: str) -> list[str]:
     """Return every structurally valid ``lib_id`` in source order."""
     result: list[str] = []
-    try:
-        all_forms = forms(text)
-    except SExprError:
-        if strict:
-            raise
-        return _FRAGMENT_LIB_ID.findall(text)
+    all_forms = forms(text)
     roots = [form for form in all_forms if form.depth == 0 and form.head == "kicad_sch"]
-    if strict and len(roots) != 1:
+    if len(roots) != 1:
         raise SExprError(f"expected one kicad_sch root, found {len(roots)}")
     for form in all_forms:
         if form.head == "lib_id" and (value := _first_string(text, form)) is not None:
@@ -50,25 +41,17 @@ def find_lib_ids(text: str, *, strict: bool = False) -> list[str]:
     return result
 
 
-def sheet_files(text: str, *, strict: bool = False) -> list[str]:
+def sheet_files(text: str) -> list[str]:
     """Return filenames from KiCad ``Sheetfile`` properties."""
-    try:
-        all_forms = forms(text)
-    except SExprError:
-        if strict:
-            raise
-        return _FRAGMENT_SHEETFILE.findall(text)
+    all_forms = forms(text)
     roots = [form for form in all_forms if form.depth == 0 and form.head == "kicad_sch"]
-    if strict and len(roots) != 1:
+    if len(roots) != 1:
         raise SExprError(f"expected one kicad_sch root, found {len(roots)}")
-    if len(roots) == 1:
-        candidates = [
-            property_form
-            for sheet in child_forms(all_forms, roots[0], "sheet")
-            for property_form in child_forms(all_forms, sheet, "property")
-        ]
-    else:
-        candidates = [form for form in all_forms if form.head == "property"]
+    candidates = [
+        property_form
+        for sheet in child_forms(all_forms, roots[0], "sheet")
+        for property_form in child_forms(all_forms, sheet, "property")
+    ]
     result: list[str] = []
     for form in candidates:
         if form.head != "property":

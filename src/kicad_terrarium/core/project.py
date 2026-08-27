@@ -45,7 +45,7 @@ def project_schematics(
 
         text = read_text(current)
         try:
-            children = sheet_files(text, strict=True)
+            children = sheet_files(text)
         except SExprError as error:
             raise ProjectError(f"invalid schematic {current}: {error}") from error
         for child_name in children:
@@ -65,7 +65,7 @@ def project_lib_ids(
     for sheet in project_schematics(root, read_text, allow_external=allow_external):
         text = read_text(sheet)
         try:
-            all_ids += find_lib_ids(text, strict=True)
+            all_ids += find_lib_ids(text)
         except SExprError as error:
             raise ProjectError(f"invalid schematic {sheet}: {error}") from error
     return all_ids
