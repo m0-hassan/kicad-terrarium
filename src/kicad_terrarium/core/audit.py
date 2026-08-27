@@ -8,8 +8,6 @@ from kicad_terrarium.core.sexpr import child_forms, descendant_forms, forms, quo
 
 _PAD_QUOTED = re.compile(r'\(pad\s+"((?:\\.|[^"\\])*)"')
 _PAD_BARE = re.compile(r"\(pad\s+([^\s()\"]+)[\s(]")
-_MODEL = re.compile(r'\(model\s+"((?:\\.|[^"\\])*)"')
-_STOCK_MODEL = re.compile(r"^\$\{(?:KICAD\d+_3DMODEL_DIR|KISYS3DMOD)\}(?:[/\\]|$)")
 
 
 def pad_names(mod_text: str) -> set[str]:
@@ -42,13 +40,3 @@ def cache_symbol_pins(sheet_text: str) -> dict[str, set[str]]:
 def missing_pads(pins: set[str], pads: set[str]) -> set[str]:
     """Symbol pin numbers with no matching pad; extra pads are acceptable."""
     return pins - pads
-
-
-def is_stock_model_path(path: str) -> bool:
-    """Whether a model URI uses a recognized KiCad installation variable."""
-    return _STOCK_MODEL.match(path) is not None
-
-
-def model_paths(mod_text: str) -> list[str]:
-    """Every 3D model URI in a footprint definition."""
-    return _MODEL.findall(mod_text)

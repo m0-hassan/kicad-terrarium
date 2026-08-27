@@ -11,17 +11,21 @@ from rich.markup import escape
 from kicad_terrarium.commands.common import console, fail, resolve_root
 from kicad_terrarium.core.audit import (
     cache_symbol_pins,
-    is_stock_model_path,
     missing_pads,
-    model_paths,
     pad_names,
 )
 from kicad_terrarium.core.discover import library_counts, placed_symbols
+from kicad_terrarium.core.footprints import (
+    is_embedded_model_path,
+    is_stock_model_path,
+    model_paths,
+)
 from kicad_terrarium.core.io import read_utf8
-from kicad_terrarium.core.models import Diagnostic, PlacedSymbol, SymbolId
+from kicad_terrarium.core.models import Diagnostic, FootprintId, PlacedSymbol, SymbolId
 from kicad_terrarium.core.project import project_lib_ids, project_schematics
-from kicad_terrarium.core.resolve import expand_uri, resolve_footprint_libs
+from kicad_terrarium.core.resolve import expand_uri, resolve_library_details
 from kicad_terrarium.core.sexpr import SExprError
+from kicad_terrarium.core.tables import portable_project_uri
 from kicad_terrarium.core.verify import verify_project
 from kicad_terrarium.presentation import DONE, ERROR, WARNING, status_line
 
@@ -96,12 +100,13 @@ def _audit_project(root: Path) -> tuple[list[Diagnostic], int]:
     # Keep one physical component when a multi-unit symbol has several records.
     physical: dict[tuple[Path, str], PlacedSymbol] = {}
     for sheet, item in instances:
-        if item.on_board and not item.dnp and item.symbol_id.library != "power":
+        if item.on_board and not item.dnp and not item.reference.startswith("#"):
             physical[(sheet, item.reference)] = item
 
-    footprint_libs = resolve_footprint_libs(project_dir)
+    footprint_details = resolve_library_details(project_dir, table_name="fp-lib-table")
     checked_models: set[Path] = set()
     module_texts: dict[Path, str] = {}
+    reported_external_libraries: set[str] = set()
     for (sheet, _reference), item in physical.items():
         reference = item.reference
         symbol_id = str(item.symbol_id)
@@ -116,15 +121,9 @@ def _audit_project(root: Path) -> tuple[list[Diagnostic], int]:
                 )
             )
             continue
-        library, separator, name = footprint.partition(":")
-        if (
-            not separator
-            or not library
-            or not name
-            or name in {".", ".."}
-            or "/" in name
-            or "\\" in name
-        ):
+        try:
+            footprint_id = FootprintId.parse(footprint)
+        except ValueError:
             findings.append(
                 Diagnostic(
                     "error",
@@ -134,8 +133,10 @@ def _audit_project(root: Path) -> tuple[list[Diagnostic], int]:
                 )
             )
             continue
-        directory = footprint_libs.get(library)
-        if directory is None or not directory.is_dir():
+        library = footprint_id.library
+        name = footprint_id.name
+        resolved_library = footprint_details.libraries.get(library)
+        if resolved_library is None or not resolved_library.path.is_dir():
             findings.append(
                 Diagnostic(
                     "error",
@@ -145,6 +146,22 @@ def _audit_project(root: Path) -> tuple[list[Diagnostic], int]:
                 )
             )
             continue
+        directory = resolved_library.path
+        source_travels = (
+            resolved_library.entry.scope == "project"
+            and portable_project_uri(resolved_library.entry.uri)
+            and directory.resolve().is_relative_to(project_dir)
+        )
+        if not source_travels and library not in reported_external_libraries:
+            findings.append(
+                Diagnostic(
+                    "error",
+                    f"footprint library {library!r} is not contained in the project",
+                    directory,
+                    "external-footprint-library",
+                )
+            )
+            reported_external_libraries.add(library)
         module = (directory / f"{name}.kicad_mod").resolve()
         if not module.is_relative_to(directory.resolve()):
             findings.append(
@@ -193,39 +210,47 @@ def _audit_project(root: Path) -> tuple[list[Diagnostic], int]:
                 )
         checked_models.add(module)
 
-    for module in sorted(checked_models):
-        for model in model_paths(module_texts[module]):
-            if is_stock_model_path(model):
-                continue
-            if model.startswith("${KIPRJMOD}"):
-                resolved = expand_uri(model, project_dir).resolve()
-                if not resolved.is_relative_to(project_dir):
-                    findings.append(
-                        Diagnostic(
-                            "error",
-                            f"3D model escapes the project: {model}",
-                            module,
-                            "external-model",
-                        )
-                    )
-                elif not resolved.exists():
-                    findings.append(
-                        Diagnostic(
-                            "error",
-                            f"3D model does not exist: {model}",
-                            module,
-                            "missing-model",
-                        )
-                    )
-            else:
+    def check_model(model: str, owner: Path) -> None:
+        if is_stock_model_path(model) or is_embedded_model_path(model):
+            return
+        if model.startswith("${KIPRJMOD}"):
+            resolved = expand_uri(model, project_dir).resolve()
+            if not resolved.is_relative_to(project_dir):
                 findings.append(
                     Diagnostic(
-                        "warning",
-                        f"3D model path will not travel: {model}",
-                        module,
+                        "error",
+                        f"3D model escapes the project: {model}",
+                        owner,
                         "external-model",
                     )
                 )
+            elif not resolved.is_file():
+                findings.append(
+                    Diagnostic(
+                        "error",
+                        f"3D model does not exist: {model}",
+                        owner,
+                        "missing-model",
+                    )
+                )
+        else:
+            findings.append(
+                Diagnostic(
+                    "error",
+                    f"3D model path will not travel: {model}",
+                    owner,
+                    "external-model",
+                )
+            )
+
+    for module in sorted(checked_models):
+        for model in model_paths(module_texts[module]):
+            check_model(model, module)
+
+    board = root.with_suffix(".kicad_pcb")
+    if board.is_file():
+        for model in model_paths(read_utf8(board)):
+            check_model(model, board)
 
     reached = {sheet.resolve() for sheet in sheets}
     for candidate in sorted(project_dir.rglob("*.kicad_sch")):
@@ -267,10 +292,24 @@ def audit(
             console().print(f"  {escape(row.message)}")
         if len(rows) > len(shown):
             console().print(f"  [dim]{len(rows) - len(shown)} more; use --precise[/dim]")
+    errors = sum(finding.level == "error" for finding in findings)
+    warnings = len(findings) - errors
     if findings:
-        console().print(status_line(ERROR, f"{len(findings)} finding(s)"))
+        summary = ", ".join(
+            part
+            for part in (
+                f"{errors} error(s)" if errors else "",
+                f"{warnings} warning(s)" if warnings else "",
+            )
+            if part
+        )
+        console().print(status_line(ERROR if errors else WARNING, summary))
+    if errors:
         raise typer.Exit(code=1)
-    console().print(status_line(DONE, f"audit clean; {physical_count} physical symbols checked"))
+    if not findings:
+        console().print(
+            status_line(DONE, f"audit clean; {physical_count} physical symbols checked")
+        )
 
 
 def verify(
@@ -279,7 +318,7 @@ def verify(
         help="Root .kicad_sch or project directory; defaults to the project here.",
     ),
 ) -> None:
-    """Prove every used symbol source exists inside the project."""
+    """Prove used symbol, footprint, and custom-model sources travel."""
     project = resolve_root(root)
     report = verify_project(project)
     for diagnostic in report.diagnostics:
@@ -289,7 +328,9 @@ def verify(
         console().print(
             status_line(
                 DONE,
-                f"source-complete; {report.libraries} libraries, {report.symbols} symbols",
+                f"source-complete; {report.libraries} symbol libraries, "
+                f"{report.symbols} symbols; {report.footprint_libraries} footprint libraries, "
+                f"{report.footprints} footprints; {report.model_files} custom model files",
             )
         )
     if not report.ok:

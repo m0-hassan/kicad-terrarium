@@ -15,16 +15,26 @@ from kicad_terrarium.core.workflows import (
 LIB = '(kicad_symbol_lib\n (version 20251024)\n (symbol "{name}"))\n'
 
 
-def _project(tmp_path: Path, lib_id: str = "Foo:A") -> Path:
+def _project(tmp_path: Path, lib_id: str = "Foo:A", footprint: str = "") -> Path:
     tmp_path.mkdir(parents=True, exist_ok=True)
     root = tmp_path / "board.kicad_sch"
     root.write_text(
         f'(kicad_sch (lib_symbols (symbol "{lib_id}")) '
         f'(symbol (lib_id "{lib_id}") (property "Reference" "U1") '
-        '(property "Value" "x") (property "Footprint" "")))'
+        f'(property "Value" "x") (property "Footprint" "{footprint}")))'
     )
     (tmp_path / "board.kicad_pro").write_text("{}")
     return root
+
+
+def _add_local_symbol_source(project: Path) -> None:
+    symbols = project / "library/Local.kicad_sym"
+    symbols.parent.mkdir()
+    symbols.write_text(LIB.format(name="A"))
+    (project / "sym-lib-table").write_text(
+        '(sym_lib_table (lib (name "Local")(type "KiCad")'
+        '(uri "${KIPRJMOD}/library/Local.kicad_sym")))'
+    )
 
 
 def test_pluck_rejects_same_name_different_definition(tmp_path):
@@ -127,6 +137,28 @@ def test_seal_directly_registers_a_nested_project_local_source(tmp_path):
     table = (project / "sym-lib-table").read_text()
     assert '(name "Foo")' in table
     assert "${KIPRJMOD}/parts/custom.kicad_sym" in table
+
+
+def test_seal_does_not_replace_a_same_named_nested_table_registration(tmp_path):
+    project = tmp_path / "project"
+    root = _project(project)
+    parts = project / "parts"
+    parts.mkdir()
+    (parts / "Foo.kicad_sym").write_text(LIB.format(name="A"))
+    tables = project / "tables"
+    tables.mkdir()
+    (tables / "libraries.sym-lib-table").write_text(
+        '(sym_lib_table (lib (name "Foo")(type "KiCad")(uri "${KIPRJMOD}/parts/Foo.kicad_sym")))'
+    )
+    (project / "sym-lib-table").write_text(
+        '(sym_lib_table (lib (name "Foo")(type "Table")'
+        '(uri "${KIPRJMOD}/tables/libraries.sym-lib-table")))'
+    )
+
+    with pytest.raises(WorkflowError, match="already used by a 'Table' entry"):
+        plan_seal(root)
+
+    assert not (project / "library/terrarium").exists()
 
 
 def test_seal_migrates_a_managed_shadow_and_keeps_global_search_available(tmp_path, monkeypatch):
@@ -243,3 +275,123 @@ def test_seal_retires_a_used_machine_specific_project_registration(tmp_path, mon
     assert "(hidden)" not in table
     assert external.is_file()
     assert verify_project(root).ok
+
+
+def test_seal_vendors_used_footprints_board_links_and_custom_models(tmp_path):
+    project = tmp_path / "project"
+    root = _project(project, lib_id="Local:A", footprint="Parts:Widget")
+    _add_local_symbol_source(project)
+
+    source = tmp_path / "personal/Parts.pretty"
+    source.mkdir(parents=True)
+    model = tmp_path / "personal/models/widget.step"
+    model.parent.mkdir()
+    model.write_bytes(b"STEP model")
+    (source / "Widget.kicad_mod").write_text(
+        f'''(footprint "Widget"
+          (pad "1" thru_hole circle (at 0 0) (size 1 1) (drill 0.5) (layers "*.Cu" "*.Mask"))
+          (model "{model}"))'''
+    )
+    (project / "fp-lib-table").write_text(
+        f'(fp_lib_table (lib (name "Parts")(type "KiCad")(uri "{source}")))'
+    )
+    board = project / "board.kicad_pcb"
+    board.write_text(f'(kicad_pcb (footprint "Parts:Widget" (model "{model}")))')
+
+    first = plan_seal(root)
+    first.plan.apply()
+
+    destination = project / "library/terrarium/footprints/Parts.pretty/Widget.kicad_mod"
+    [sealed_model] = list((project / "library/terrarium/models/Terrarium__Parts").glob("*.step"))
+    assert destination.is_file()
+    assert sealed_model.read_bytes() == b"STEP model"
+    assert "Terrarium__Parts:Widget" in root.read_text()
+    assert "Terrarium__Parts:Widget" in board.read_text()
+    assert str(model) not in destination.read_text()
+    assert str(model) not in board.read_text()
+    table = (project / "fp-lib-table").read_text()
+    assert '(name "Parts")' not in table
+    assert '(name "Terrarium__Parts")' in table
+    assert "${KIPRJMOD}/library/terrarium/footprints/Parts.pretty" in table
+
+    report = verify_project(root)
+    assert report.ok
+    assert (report.footprint_libraries, report.footprints, report.model_files) == (1, 1, 1)
+
+    second = plan_seal(root)
+    assert second.plan.changes == []
+
+    sealed_model.unlink()
+    broken = verify_project(root)
+    assert not broken.ok
+    assert any(item.code == "missing-model" for item in broken.diagnostics)
+
+
+def test_seal_fails_before_writing_when_a_custom_model_is_missing(tmp_path):
+    project = tmp_path / "project"
+    root = _project(project, lib_id="Local:A", footprint="Parts:Widget")
+    _add_local_symbol_source(project)
+    source = tmp_path / "personal/Parts.pretty"
+    source.mkdir(parents=True)
+    (source / "Widget.kicad_mod").write_text('(footprint "Widget" (model "/missing/widget.step"))')
+    (project / "fp-lib-table").write_text(
+        f'(fp_lib_table (lib (name "Parts")(type "KiCad")(uri "{source}")))'
+    )
+
+    with pytest.raises(ValueError, match="3D model does not exist"):
+        plan_seal(root)
+
+    assert not (project / "library/terrarium/footprints").exists()
+
+
+def test_seal_carries_a_custom_model_from_an_unlinked_board_footprint(tmp_path):
+    project = tmp_path / "project"
+    root = _project(project, lib_id="Local:A")
+    _add_local_symbol_source(project)
+    source_model = tmp_path / "personal/mechanical.wrl"
+    source_model.parent.mkdir()
+    source_model.write_bytes(b"VRML model")
+    source_model.with_suffix(".step").write_bytes(b"STEP companion")
+    board = project / "board.kicad_pcb"
+    board.write_text(f'(kicad_pcb (footprint "BoardMechanical" (model "{source_model}")))')
+
+    result = plan_seal(root)
+    assert (result.model_files, result.changed_model_files) == (1, 2)
+    result.plan.apply()
+
+    sealed_models = sorted((project / "library/terrarium/models/Board").iterdir())
+    assert [path.suffix for path in sealed_models] == [".step", ".wrl"]
+    assert sealed_models[0].stem == sealed_models[1].stem
+    assert sealed_models[0].read_bytes() == b"STEP companion"
+    assert sealed_models[1].read_bytes() == b"VRML model"
+    assert str(source_model) not in board.read_text()
+    assert verify_project(root).ok
+    second = plan_seal(root)
+    assert (second.model_files, second.changed_model_files) == (1, 0)
+    assert second.plan.changes == []
+
+
+def test_seal_preserves_a_project_footprint_library_and_localizes_its_model(tmp_path):
+    project = tmp_path / "project"
+    root = _project(project, lib_id="Local:A", footprint="ProjectParts:Widget")
+    _add_local_symbol_source(project)
+    footprint_library = project / "library/ProjectParts.pretty"
+    footprint_library.mkdir()
+    external_model = tmp_path / "personal/widget.step"
+    external_model.parent.mkdir()
+    external_model.write_bytes(b"project part model")
+    module = footprint_library / "Widget.kicad_mod"
+    module.write_text(f'(footprint "Widget" (model "{external_model}"))')
+    (project / "fp-lib-table").write_text(
+        '(fp_lib_table (lib (name "ProjectParts")(type "KiCad")'
+        '(uri "${KIPRJMOD}/library/ProjectParts.pretty")))'
+    )
+
+    result = plan_seal(root)
+    result.plan.apply()
+
+    assert "ProjectParts:Widget" in root.read_text()
+    assert "Terrarium__ProjectParts" not in root.read_text()
+    assert "${KIPRJMOD}/library/terrarium/models/ProjectParts/" in module.read_text()
+    assert verify_project(root).ok
+    assert plan_seal(root).plan.changes == []

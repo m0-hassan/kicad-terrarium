@@ -130,11 +130,54 @@ def test_audit_reports_unassigned_footprints(tmp_path):
     assert "has no footprint" in result.stdout
 
 
+def test_audit_excludes_virtual_power_references_after_seal_namespacing(tmp_path):
+    root = _project(tmp_path / "project", library="Terrarium__power", symbol="GND")
+    root.write_text(root.read_text().replace('"U1"', '"#PWR01"'))
+
+    result = runner.invoke(app, ["audit", str(root), "--precise"])
+
+    assert result.exit_code == 0
+    assert "0 physical symbols checked" in result.stdout
+
+
+def test_audit_reports_warning_only_findings_without_failing(tmp_path):
+    root = _project(tmp_path / "project", library="Terrarium__power", symbol="GND")
+    root.write_text(root.read_text().replace('"U1"', '"#PWR01"'))
+    (root.parent / "alternate.kicad_sch").write_text("(kicad_sch)")
+
+    result = runner.invoke(app, ["audit", str(root), "--precise"])
+
+    assert result.exit_code == 0
+    assert "orphaned sheet" in result.stdout
+    assert "1 warning(s)" in result.stdout
+
+
 def test_audit_rejects_path_like_footprint_ids_before_filesystem_lookup(tmp_path):
     root = _project(tmp_path / "project", footprint="Parts:../../private")
     result = runner.invoke(app, ["audit", str(root), "--precise"])
     assert result.exit_code == 1
     assert "malformed footprint ID" in result.stdout
+
+
+def test_audit_and_verify_reject_machine_local_footprint_sources(tmp_path):
+    root = _project(tmp_path / "project", footprint="Parts:Widget")
+    source = tmp_path / "personal/Parts.pretty"
+    source.mkdir(parents=True)
+    (source / "Widget.kicad_mod").write_text(
+        '(footprint "Widget" (pad "1" thru_hole circle (at 0 0) '
+        '(size 1 1) (drill 0.5) (layers "*.Cu" "*.Mask")))'
+    )
+    (root.parent / "fp-lib-table").write_text(
+        f'(fp_lib_table (lib (name "Parts")(type "KiCad")(uri "{source}")))'
+    )
+
+    audit = runner.invoke(app, ["audit", str(root), "--precise"])
+    verify = runner.invoke(app, ["verify", str(root)])
+
+    assert audit.exit_code == 1
+    assert "not contained in the project" in audit.stdout
+    assert verify.exit_code == 1
+    assert "non-portable URI" in verify.stdout
 
 
 def test_list_reads_nested_vault_libraries(tmp_path):

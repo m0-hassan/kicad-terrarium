@@ -1,11 +1,14 @@
 from kicad_terrarium.core.audit import (
     cache_symbol_pins,
-    is_stock_model_path,
     missing_pads,
-    model_paths,
     pad_names,
 )
 from kicad_terrarium.core.discover import placed_symbols
+from kicad_terrarium.core.footprints import (
+    is_embedded_model_path,
+    is_stock_model_path,
+    model_paths,
+)
 
 SHEET = """(kicad_sch
 \t(lib_symbols
@@ -69,3 +72,4 @@ def test_model_paths_distinguishes_project_stock_and_untravelable_refs():
         "${KICAD_PERSONAL_MODELS}/custom.step",
         "/Users/someone/Downloads/c.step",
     ]
+    assert is_embedded_model_path("kicad-embed://custom.step")

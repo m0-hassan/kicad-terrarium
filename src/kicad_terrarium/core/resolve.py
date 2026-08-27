@@ -313,13 +313,3 @@ def resolve_global_library_details(
         config_dir,
         include_project=False,
     )
-
-
-def resolve_footprint_libs(
-    project_dir: Path,
-    share_dir: Path = DEFAULT_SHARE,
-    config_dir: Path = DEFAULT_CONFIG,
-) -> dict[str, Path]:
-    """Resolve footprint-library nicknames to paths for physical audits."""
-    details = _resolve(project_dir, "fp-lib-table", share_dir, config_dir)
-    return {name: library.path for name, library in details.libraries.items()}
